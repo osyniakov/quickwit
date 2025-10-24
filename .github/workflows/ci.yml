@@ -93,7 +93,7 @@ jobs:
 #        run: cargo build --features=postgres --bin quickwit
 #        working-directory: ./quickwit
       - name: Install python packages
-        if: always() && steps.modified.outputs.rust_src == 'true'
+#        if: always() && steps.modified.outputs.rust_src == 'true'
         run: |
           pip install --user pipenv
           pipenv install --deploy --ignore-pipfile
