@@ -138,8 +138,8 @@ jobs:
         working-directory: ./quickwit/quickwit-cli/tests
 
       - name: Prepare LocalStack S3
-        run: pipenv run ./quickwit-cli/tests/prepare_tests.sh
-        working-directory: ./quickwit
+        run: pipenv run ./prepare_tests.sh
+        working-directory: ./quickwit/quickwit-cli/tests
 
       # GitHub Actions does not allow services to be started with a custom command,
       # so we are running Azurite as a container manually.
