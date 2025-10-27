@@ -138,7 +138,7 @@ jobs:
         working-directory: ./quickwit/quickwit-cli/tests
 
       - name: Prepare LocalStack S3
-        run: ./quickwit-cli/tests/prepare_tests.sh
+        run: pipenv run ./quickwit-cli/tests/prepare_tests.sh
         working-directory: ./quickwit
 
       # GitHub Actions does not allow services to be started with a custom command,
