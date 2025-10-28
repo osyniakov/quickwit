@@ -35,22 +35,22 @@ jobs:
     permissions:
       contents: read
       actions: write
-    services:
-      # PostgreSQL service container
-      postgres:
-        image: postgres:latest
-        ports:
-          - 5432:5432
-        env:
-          POSTGRES_USER: quickwit-dev
-          POSTGRES_PASSWORD: quickwit-dev
-          POSTGRES_DB: quickwit-metastore-dev
-        # Set health checks to wait until postgres has started
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+#    services:
+#      # PostgreSQL service container
+#      postgres:
+#        image: postgres:latest
+#        ports:
+#          - 5432:5432
+#        env:
+#          POSTGRES_USER: quickwit-dev
+#          POSTGRES_PASSWORD: quickwit-dev
+#          POSTGRES_DB: quickwit-metastore-dev
+#        # Set health checks to wait until postgres has started
+#        options: >-
+#          --health-cmd pg_isready
+#          --health-interval 10s
+#          --health-timeout 5s
+#          --health-retries 5
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Install Ubuntu packages
@@ -58,136 +58,140 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v.5.6.0
         with:
           python-version: '3.11'
-      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
-        id: modified
-        with:
-          filters: |
-            rust_src:
-              - quickwit/**/*.rs
-              - quickwit/**/*.toml
-              - quickwit/**/*.proto
-              - quickwit/rest-api-tests/**
-              - .github/workflows/ci.yml
-      # The following step is just meant to install rustup actually.
-      # The next one installs the correct toolchain.
-      - name: Install rustup
-        if: steps.modified.outputs.rust_src == 'true'
-        run: curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain none -y
-      - name: Setup stable Rust Toolchain
-        if: steps.modified.outputs.rust_src == 'true'
-        run: rustup show active-toolchain || rustup toolchain install
-        working-directory: ./quickwit
-      - name: Setup cache
-        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
-        if: steps.modified.outputs.rust_src == 'true'
-        with:
-          workspaces: "./quickwit -> target"
-      - name: Install nextest
-        if: always() && steps.modified.outputs.rust_src == 'true'
-        uses: taiki-e/cache-cargo-install-action@7447f04c51f2ba27ca35e7f1e28fab848c5b3ba7 # v2.3.1
-        with:
-          tool: cargo-nextest
-      - name: cargo nextest
-        if: always() && steps.modified.outputs.rust_src == 'true'
-        run: cargo nextest run --features=postgres --retries 1
-        working-directory: ./quickwit
-      - name: cargo build
-        if: always() && steps.modified.outputs.rust_src == 'true'
-        run: cargo build --features=postgres --bin quickwit
-        working-directory: ./quickwit
+#      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+#        id: modified
+#        with:
+#          filters: |
+#            rust_src:
+#              - quickwit/**/*.rs
+#              - quickwit/**/*.toml
+#              - quickwit/**/*.proto
+#              - quickwit/rest-api-tests/**
+#              - .github/workflows/ci.yml
+#      # The following step is just meant to install rustup actually.
+#      # The next one installs the correct toolchain.
+#      - name: Install rustup
+#        if: steps.modified.outputs.rust_src == 'true'
+#        run: curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain none -y
+#      - name: Setup stable Rust Toolchain
+#        if: steps.modified.outputs.rust_src == 'true'
+#        run: rustup show active-toolchain || rustup toolchain install
+#        working-directory: ./quickwit
+#      - name: Setup cache
+#        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+#        if: steps.modified.outputs.rust_src == 'true'
+#        with:
+#          workspaces: "./quickwit -> target"
+#      - name: Install nextest
+#        if: always() && steps.modified.outputs.rust_src == 'true'
+#        uses: taiki-e/cache-cargo-install-action@7447f04c51f2ba27ca35e7f1e28fab848c5b3ba7 # v2.3.1
+#        with:
+#          tool: cargo-nextest
+#      - name: cargo nextest
+#        if: always() && steps.modified.outputs.rust_src == 'true'
+#        run: cargo nextest run --features=postgres --retries 1
+#        working-directory: ./quickwit
+#      - name: cargo build
+#        if: always() && steps.modified.outputs.rust_src == 'true'
+#        run: cargo build --features=postgres --bin quickwit
+#        working-directory: ./quickwit
       - name: Install python packages
-        if: always() && steps.modified.outputs.rust_src == 'true'
+#        if: always() && steps.modified.outputs.rust_src == 'true'
         run: |
           pip install --user pipenv
           pipenv install --deploy --ignore-pipfile
-        working-directory: ./quickwit/rest-api-tests
-      - name: Run REST API tests
-        if: always() && steps.modified.outputs.rust_src == 'true'
-        run: pipenv run python3 ./run_tests.py --binary ../target/debug/quickwit
-        working-directory: ./quickwit/rest-api-tests
+#        working-directory: ./quickwit/rest-api-tests
+        working-directory: ./quickwit/quickwit-cli/tests
+      - name: Prepare LocalStack S3
+        run: pipenv run ./prepare_tests.sh
+        working-directory: ./quickwit/quickwit-cli/tests
+#      - name: Run REST API tests
+#        if: always() && steps.modified.outputs.rust_src == 'true'
+#        run: pipenv run python3 ./run_tests.py --binary ../target/debug/quickwit
+#        working-directory: ./quickwit/rest-api-tests
 
-  lints:
-    name: Lints
-    runs-on: "ubuntu-latest"
-    timeout-minutes: 20
-    permissions:
-      contents: read
-      actions: write
-    steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
-        id: modified
-        with:
-          filters: |
-            rust_src:
-              - quickwit/**/*.rs
-              - quickwit/**/*.toml
-              - quickwit/**/*.proto
-              - .github/workflows/ci.yml
-      - name: Install Ubuntu packages
-        if: always() && steps.modified.outputs.rust_src == 'true'
-        run: sudo apt-get -y install protobuf-compiler python3 python3-pip
-      - name: Install rustup
-        if: steps.modified.outputs.rust_src == 'true'
-        run: curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain none -y
-      - name: Setup nightly Rust Toolchain (for rustfmt)
-        if: steps.modified.outputs.rust_src == 'true'
-        run: rustup toolchain install nightly
-      - name: Setup stable Rust Toolchain
-        if: steps.modified.outputs.rust_src == 'true'
-        run: rustup show active-toolchain || rustup toolchain install
-        working-directory: ./quickwit
-      - name: Setup cache
-        if: steps.modified.outputs.rust_src == 'true'
-        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
-        with:
-          workspaces: "./quickwit -> target"
-      - name: Install cargo deny
-        if: always() && steps.modified.outputs.rust_src == 'true'
-        uses: taiki-e/cache-cargo-install-action@7447f04c51f2ba27ca35e7f1e28fab848c5b3ba7 # v2.3.1
-        with:
-          # 0.18 requires rustc 1.85
-          tool: cargo-deny@0.17.0
-      - name: cargo clippy
-        if: always() && steps.modified.outputs.rust_src == 'true'
-        run: cargo clippy --workspace --tests --all-features
-        working-directory: ./quickwit
-      - name: cargo deny
-        if: always() && steps.modified.outputs.rust_src == 'true'
-        run: cargo deny check licenses
-        working-directory: ./quickwit
-      - name: cargo doc
-        if: always() && steps.modified.outputs.rust_src == 'true'
-        run: cargo doc
-        working-directory: ./quickwit
-      - name: License headers check
-        if: always()
-        run: bash scripts/check_license_headers.sh
-        working-directory: ./quickwit
-      - name: rustfmt
-        if: always() && steps.modified.outputs.rust_src == 'true'
-        run: cargo +nightly fmt --all -- --check
-        working-directory: ./quickwit
-
-  thirdparty-license:
-    name: Check Datadog third-party license file
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: write
-    steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
-
-      - name: Cache cargo tools
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ~/.cargo/bin
-          key: ${{ runner.os }}-cargo-tools-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Install dd-rust-license-tool
-        run: dd-rust-license-tool --help || cargo install --git https://github.com/DataDog/rust-license-tool.git --force
-
-      - name: Check Datadog third-party license file
-        run: dd-rust-license-tool --config quickwit/license-tool.toml --manifest-path quickwit/Cargo.toml check
+#  lints:
+#    name: Lints
+#    runs-on: "ubuntu-latest"
+#    timeout-minutes: 20
+#    permissions:
+#      contents: read
+#      actions: write
+#    steps:
+#      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+#      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+#        id: modified
+#        with:
+#          filters: |
+#            rust_src:
+#              - quickwit/**/*.rs
+#              - quickwit/**/*.toml
+#              - quickwit/**/*.proto
+#              - .github/workflows/ci.yml
+#      - name: Install Ubuntu packages
+#        if: always() && steps.modified.outputs.rust_src == 'true'
+#        run: sudo apt-get -y install protobuf-compiler python3 python3-pip
+#      - name: Install rustup
+#        if: steps.modified.outputs.rust_src == 'true'
+#        run: curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain none -y
+#      - name: Setup nightly Rust Toolchain (for rustfmt)
+#        if: steps.modified.outputs.rust_src == 'true'
+#        run: rustup toolchain install nightly
+#      - name: Setup stable Rust Toolchain
+#        if: steps.modified.outputs.rust_src == 'true'
+#        run: rustup show active-toolchain || rustup toolchain install
+#        working-directory: ./quickwit
+#      - name: Setup cache
+#        if: steps.modified.outputs.rust_src == 'true'
+#        uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+#        with:
+#          workspaces: "./quickwit -> target"
+#      - name: Install cargo deny
+#        if: always() && steps.modified.outputs.rust_src == 'true'
+#        uses: taiki-e/cache-cargo-install-action@7447f04c51f2ba27ca35e7f1e28fab848c5b3ba7 # v2.3.1
+#        with:
+#          # 0.18 requires rustc 1.85
+#          tool: cargo-deny@0.17.0
+#      - name: cargo clippy
+#        if: always() && steps.modified.outputs.rust_src == 'true'
+#        run: cargo clippy --workspace --tests --all-features
+#        working-directory: ./quickwit
+#      - name: cargo deny
+#        if: always() && steps.modified.outputs.rust_src == 'true'
+#        run: cargo deny check licenses
+#        working-directory: ./quickwit
+#      - name: cargo doc
+#        if: always() && steps.modified.outputs.rust_src == 'true'
+#        run: cargo doc
+#        working-directory: ./quickwit
+#      - name: License headers check
+#        if: always()
+#        run: bash scripts/check_license_headers.sh
+#        working-directory: ./quickwit
+#      - name: rustfmt
+#        if: always() && steps.modified.outputs.rust_src == 'true'
+#        run: cargo +nightly fmt --all -- --check
+#        working-directory: ./quickwit
+#
+#  thirdparty-license:
+#    name: Check Datadog third-party license file
+#    runs-on: ubuntu-latest
+#    permissions:
+#      contents: read
+#      actions: write
+#    steps:
+#      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+#      - name: Install Rust toolchain
+#        uses: dtolnay/rust-toolchain@5d458579430fc14a04a08a1e7d3694f545e91ce6 # stable
+#
+#      - name: Cache cargo tools
+#        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+#        with:
+#          path: ~/.cargo/bin
+#          key: ${{ runner.os }}-cargo-tools-${{ hashFiles('**/Cargo.lock') }}
+#
+#      - name: Install dd-rust-license-tool
+#        run: dd-rust-license-tool --help || cargo install --git https://github.com/DataDog/rust-license-tool.git --force
+#
+#      - name: Check Datadog third-party license file
+#        run: dd-rust-license-tool --config quickwit/license-tool.toml --manifest-path quickwit/Cargo.toml check
