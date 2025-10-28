@@ -71,38 +71,38 @@ jobs:
       # The following step is just meant to install rustup actually.
       # The next one installs the correct toolchain.
       - name: Install rustup
-#        if: steps.modified.outputs.rust_src == 'true'
+        if: steps.modified.outputs.rust_src == 'true'
         run: curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain none -y
       - name: Setup stable Rust Toolchain
-#        if: steps.modified.outputs.rust_src == 'true'
+        if: steps.modified.outputs.rust_src == 'true'
         run: rustup show active-toolchain || rustup toolchain install
         working-directory: ./quickwit
       - name: Setup cache
         uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
-#        if: steps.modified.outputs.rust_src == 'true'
+        if: steps.modified.outputs.rust_src == 'true'
         with:
           workspaces: "./quickwit -> target"
       - name: Install nextest
-#        if: always() && steps.modified.outputs.rust_src == 'true'
+        if: always() && steps.modified.outputs.rust_src == 'true'
         uses: taiki-e/cache-cargo-install-action@7447f04c51f2ba27ca35e7f1e28fab848c5b3ba7 # v2.3.1
         with:
           tool: cargo-nextest
       - name: cargo nextest
-#        if: always() && steps.modified.outputs.rust_src == 'true'
+        if: always() && steps.modified.outputs.rust_src == 'true'
         run: cargo nextest run --features=postgres --retries 1
         working-directory: ./quickwit
       - name: cargo build
-#        if: always() && steps.modified.outputs.rust_src == 'true'
+        if: always() && steps.modified.outputs.rust_src == 'true'
         run: cargo build --features=postgres --bin quickwit
         working-directory: ./quickwit
       - name: Install python packages
-#        if: always() && steps.modified.outputs.rust_src == 'true'
+        if: always() && steps.modified.outputs.rust_src == 'true'
         run: |
           pip install --user pipenv
-          pipenv sync
+          pipenv install --deploy --ignore-pipfile
         working-directory: ./quickwit/rest-api-tests
       - name: Run REST API tests
-#        if: always() && steps.modified.outputs.rust_src == 'true'
+        if: always() && steps.modified.outputs.rust_src == 'true'
         run: pipenv run python3 ./run_tests.py --binary ../target/debug/quickwit
         working-directory: ./quickwit/rest-api-tests
 
