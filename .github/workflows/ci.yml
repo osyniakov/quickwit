@@ -99,7 +99,7 @@ jobs:
 #        if: always() && steps.modified.outputs.rust_src == 'true'
         run: |
           pip install --user pipenv
-          pipenv install --deploy --ignore-pipfile
+          pipenv sync
         working-directory: ./quickwit/rest-api-tests
       - name: Run REST API tests
 #        if: always() && steps.modified.outputs.rust_src == 'true'
