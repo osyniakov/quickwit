@@ -15,7 +15,6 @@
 #![no_main]
 use libfuzzer_sys::fuzz_target;
 
-// A dynamic-mode doc mapper accepts any valid JSON document.
 // Constructed once to avoid expensive re-initialisation on every iteration.
 static DOC_MAPPER: std::sync::LazyLock<quickwit_doc_mapper::DocMapper> =
     std::sync::LazyLock::new(|| {

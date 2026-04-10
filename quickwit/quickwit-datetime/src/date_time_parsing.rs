@@ -109,11 +109,14 @@ pub fn parse_timestamp_str(timestamp_str: &str) -> Option<TantivyDateTime> {
         if let Ok(timestamp_secs @ MIN_TIMESTAMP_SECONDS..=MAX_TIMESTAMP_SECONDS) =
             timestamp_secs_str.parse::<i64>()
         {
-            // Limit to 9 ASCII digit characters only. Using `find` avoids
-            // slicing at a non-char boundary when the string contains
-            // multi-byte UTF-8 characters.
+            // Scanning bytes (not chars) keeps the slice boundary on a valid
+            // char boundary: we stop at the first non-ASCII-digit byte, which
+            // is either an ASCII non-digit (safe boundary) or the leading byte
+            // of a multi-byte UTF-8 sequence (also a valid char boundary).
             let num_subsecond_digits = subsecond_digits_str
-                .find(|c: char| !c.is_ascii_digit())
+                .as_bytes()
+                .iter()
+                .position(|b| !b.is_ascii_digit())
                 .unwrap_or(subsecond_digits_str.len())
                 .min(9);
 
