@@ -9,5 +9,6 @@
 docs
 examples
 !.git/
+!.clusterfuzzlite/
 !quickwit-ui/build/.gitignore
 !quickwit-ui/.gitignore_for_build_directory
