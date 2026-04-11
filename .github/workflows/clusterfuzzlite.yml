@@ -2,8 +2,18 @@ name: ClusterFuzzLite
 on:
   push:
     branches: [main]
+    paths:
+      - "quickwit/**"
+      - "!quickwit/quickwit-ui/**"
+      - ".clusterfuzzlite/**"
+      - ".github/workflows/clusterfuzzlite.yml"
   pull_request:
     branches: [main]
+    paths:
+      - "quickwit/**"
+      - "!quickwit/quickwit-ui/**"
+      - ".clusterfuzzlite/**"
+      - ".github/workflows/clusterfuzzlite.yml"
   schedule:
     - cron: '0 4 * * *'
   workflow_dispatch:
