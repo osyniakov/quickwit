@@ -6910,6 +6910,7 @@ dependencies = [
  "libfuzzer-sys",
  "quickwit-datetime",
  "quickwit-doc-mapper",
+ "quickwit-opentelemetry",
  "quickwit-query",
  "serde_json",
 ]

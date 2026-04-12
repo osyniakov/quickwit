@@ -13,9 +13,10 @@ debug = true
 [dependencies]
 libfuzzer-sys = "0.4"
 serde_json = { workspace = true }
-quickwit-query = { workspace = true }
 quickwit-datetime = { workspace = true }
 quickwit-doc-mapper = { workspace = true }
+quickwit-opentelemetry = { workspace = true }
+quickwit-query = { workspace = true }
 
 [[bin]]
 name = "fuzz_query_dsl"
@@ -38,5 +39,29 @@ doc = false
 [[bin]]
 name = "fuzz_doc_mapper"
 path = "fuzz_targets/fuzz_doc_mapper.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_doc_mapper_config"
+path = "fuzz_targets/fuzz_doc_mapper_config.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_java_datetime_format"
+path = "fuzz_targets/fuzz_java_datetime_format.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_otlp_logs"
+path = "fuzz_targets/fuzz_otlp_logs.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_otlp_spans"
+path = "fuzz_targets/fuzz_otlp_spans.rs"
 test = false
 doc = false
