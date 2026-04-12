@@ -18,8 +18,7 @@ use libfuzzer_sys::fuzz_target;
 // Constructed once to avoid expensive re-initialisation on every iteration.
 static DOC_MAPPER: std::sync::LazyLock<quickwit_doc_mapper::DocMapper> =
     std::sync::LazyLock::new(|| {
-        let builder: quickwit_doc_mapper::DocMapperBuilder =
-            serde_json::from_str("{}").unwrap();
+        let builder: quickwit_doc_mapper::DocMapperBuilder = serde_json::from_str("{}").unwrap();
         builder.try_build().unwrap()
     });
 

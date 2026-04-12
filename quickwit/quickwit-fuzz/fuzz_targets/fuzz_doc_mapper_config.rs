@@ -23,11 +23,9 @@
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
-    if let Ok(json_str) = std::str::from_utf8(data) {
-        if let Ok(builder) =
-            serde_json::from_str::<quickwit_doc_mapper::DocMapperBuilder>(json_str)
-        {
-            let _ = builder.try_build();
-        }
+    if let Ok(json_str) = std::str::from_utf8(data)
+        && let Ok(builder) = serde_json::from_str::<quickwit_doc_mapper::DocMapperBuilder>(json_str)
+    {
+        let _ = builder.try_build();
     }
 });
