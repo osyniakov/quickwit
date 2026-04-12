@@ -1,29 +1,14 @@
-name: ClusterFuzzLite
+name: ClusterFuzzLite Batch
 on:
-  push:
-    branches: [main]
-    paths:
-      - "quickwit/**"
-      - "!quickwit/quickwit-ui/**"
-      - ".clusterfuzzlite/**"
-      - ".github/workflows/clusterfuzzlite*.yml"
-  pull_request:
-    branches: [main]
-    paths:
-      - "quickwit/**"
-      - "!quickwit/quickwit-ui/**"
-      - ".clusterfuzzlite/**"
-      - ".github/workflows/clusterfuzzlite*.yml"
+  schedule:
+    - cron: '0 4 * * *'
   workflow_dispatch:
 
 permissions: {}
 
 jobs:
-  fuzzing:
+  batch-fuzzing:
     runs-on: ubuntu-latest
-    concurrency:
-      group: ${{ github.workflow }}-${{ matrix.sanitizer }}-${{ github.ref }}
-      cancel-in-progress: true
     permissions:
       security-events: write
     strategy:
@@ -41,6 +26,6 @@ jobs:
         uses: google/clusterfuzzlite/actions/run_fuzzers@v1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          fuzz-seconds: 30
-          mode: 'code-change'
+          fuzz-seconds: 3600
+          mode: 'batch'
           sanitizer: ${{ matrix.sanitizer }}
