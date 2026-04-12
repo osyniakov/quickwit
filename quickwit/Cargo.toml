@@ -37,6 +37,7 @@ members = [
   "quickwit-serve",
   "quickwit-storage",
   "quickwit-telemetry",
+  "quickwit-fuzz",
 ]
 
 # The following list excludes `quickwit-metastore-utils`

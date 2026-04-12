@@ -75,7 +75,11 @@ allow = [
 confidence-threshold = 0.8
 # Allow 1 or more licenses on a per-crate basis, so that particular licenses
 # aren't accepted for every possible crate as with the normal allow list
-exceptions = []
+exceptions = [
+    # libfuzzer-sys is only used in the quickwit-fuzz crate (never shipped);
+    # NCSA is OSI-approved and FSF-Free but not in the general allowlist.
+    { allow = ["NCSA"], name = "libfuzzer-sys" },
+]
 
 # Some crates don't have (easily) machine readable licensing information,
 # adding a clarification entry for it allows you to manually specify the

@@ -109,7 +109,16 @@ pub fn parse_timestamp_str(timestamp_str: &str) -> Option<TantivyDateTime> {
         if let Ok(timestamp_secs @ MIN_TIMESTAMP_SECONDS..=MAX_TIMESTAMP_SECONDS) =
             timestamp_secs_str.parse::<i64>()
         {
-            let num_subsecond_digits = subsecond_digits_str.len().min(9);
+            // Scanning bytes (not chars) keeps the slice boundary on a valid
+            // char boundary: we stop at the first non-ASCII-digit byte, which
+            // is either an ASCII non-digit (safe boundary) or the leading byte
+            // of a multi-byte UTF-8 sequence (also a valid char boundary).
+            let num_subsecond_digits = subsecond_digits_str
+                .as_bytes()
+                .iter()
+                .position(|b| !b.is_ascii_digit())
+                .unwrap_or(subsecond_digits_str.len())
+                .min(9);
 
             if let Ok(subsecond_digits) =
                 subsecond_digits_str[..num_subsecond_digits].parse::<i64>()
