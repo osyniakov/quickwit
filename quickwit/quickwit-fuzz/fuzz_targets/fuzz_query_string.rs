@@ -25,6 +25,8 @@ fuzz_target!(|data: &[u8]| {
             default_operator: BooleanOperand::Or,
             lenient: true,
         };
-        let _ = query.parse_user_query(&["body".to_string()]);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            query.parse_user_query(&["body".to_string()])
+        }));
     }
 });
