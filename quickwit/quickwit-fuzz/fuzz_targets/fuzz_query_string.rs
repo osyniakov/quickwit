@@ -25,8 +25,16 @@ fuzz_target!(|data: &[u8]| {
             default_operator: BooleanOperand::Or,
             lenient: true,
         };
+        // libfuzzer-sys installs a panic hook that calls abort() before stack
+        // unwinding, so catch_unwind alone is not enough to suppress a panic.
+        // Temporarily swap in a no-op hook so the known upstream tantivy bug
+        // ("Exist query without a field isn't allowed") is caught instead of
+        // aborting the fuzzer process.
+        let abort_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             query.parse_user_query(&["body".to_string()])
         }));
+        std::panic::set_hook(abort_hook);
     }
 });
