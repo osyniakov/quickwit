@@ -18,7 +18,7 @@
 // In that case, metrics index will be started as a metrics pipeline.
 
 use quickwit_actors::ActorContext;
-use quickwit_common::{is_metrics_index, temp_dir};
+use quickwit_common::{is_parquet_pipeline_index, is_sketches_index, temp_dir};
 use quickwit_config::{IndexConfig, SourceConfig};
 use quickwit_metastore::SplitMetadata;
 use quickwit_proto::indexing::{IndexingError, IndexingPipelineId};
@@ -35,6 +35,7 @@ impl IndexingService {
         index_config: IndexConfig,
         source_config: SourceConfig,
         params_fingerprint: u64,
+        use_sketch_processors: bool,
     ) -> Result<BoxedPipelineHandle, IndexingError> {
         let pipeline_uid_str = indexing_pipeline_id.pipeline_uid.to_string();
         let indexing_directory = temp_dir::Builder::default()
@@ -69,6 +70,7 @@ impl IndexingService {
             source_storage_resolver: self.storage_resolver.clone(),
             params_fingerprint,
             event_broker: self.event_broker.clone(),
+            use_sketch_processors,
         };
         let pipeline = MetricsPipeline::new(pipeline_params);
         let (mailbox, handle) = ctx.spawn_actor().spawn(pipeline);
@@ -88,13 +90,16 @@ impl IndexingService {
         immature_splits_opt: Option<Vec<SplitMetadata>>,
         params_fingerprint: u64,
     ) -> Result<BoxedPipelineHandle, IndexingError> {
-        if is_metrics_index(&indexing_pipeline_id.index_uid.index_id) {
+        let index_id = &indexing_pipeline_id.index_uid.index_id;
+        if is_parquet_pipeline_index(index_id) {
+            let use_sketch_processors = is_sketches_index(index_id);
             self.spawn_metrics_pipeline(
                 ctx,
                 indexing_pipeline_id.clone(),
                 index_config,
                 source_config,
                 params_fingerprint,
+                use_sketch_processors,
             )
             .await
         } else {

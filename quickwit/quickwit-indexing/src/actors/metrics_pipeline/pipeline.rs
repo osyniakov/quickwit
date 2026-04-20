@@ -90,6 +90,7 @@ pub struct MetricsPipelineParams {
     pub queues_dir_path: std::path::PathBuf,
     pub params_fingerprint: u64,
     pub event_broker: EventBroker,
+    pub use_sketch_processors: bool,
 }
 
 pub struct MetricsPipeline {
@@ -343,7 +344,13 @@ impl MetricsPipeline {
         // ParquetPackager
         let writer_config = quickwit_parquet_engine::storage::ParquetWriterConfig::default();
         let table_config = quickwit_parquet_engine::table_config::TableConfig::default();
+        let split_kind = if self.params.use_sketch_processors {
+            quickwit_parquet_engine::split::ParquetSplitKind::Sketches
+        } else {
+            quickwit_parquet_engine::split::ParquetSplitKind::Metrics
+        };
         let split_writer = quickwit_parquet_engine::storage::ParquetSplitWriter::new(
+            split_kind,
             writer_config,
             self.params.indexing_directory.path(),
             &table_config,
@@ -370,8 +377,21 @@ impl MetricsPipeline {
             .spawn(indexer);
 
         // ParquetDocProcessor
-        let doc_processor =
-            ParquetDocProcessor::new(index_id.to_string(), source_id.to_string(), indexer_mailbox);
+        let processor = if self.params.use_sketch_processors {
+            super::parquet_doc_processor::IngestProcessor::Sketches(
+                quickwit_parquet_engine::ingest::SketchParquetIngestProcessor::new(),
+            )
+        } else {
+            super::parquet_doc_processor::IngestProcessor::Metrics(
+                quickwit_parquet_engine::ingest::ParquetIngestProcessor,
+            )
+        };
+        let doc_processor = ParquetDocProcessor::new(
+            processor,
+            index_id.to_string(),
+            source_id.to_string(),
+            indexer_mailbox,
+        );
         let (doc_processor_mailbox, doc_processor_handle) = ctx
             .spawn_actor()
             .set_kill_switch(self.kill_switch.clone())
