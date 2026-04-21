@@ -177,14 +177,17 @@ impl ParquetWriter {
     /// are skipped for sorting but recorded in the metadata string.
     ///
     /// The writer validates and sorts dynamically from the batch at write time.
-    pub fn new(config: ParquetWriterConfig, table_config: &TableConfig) -> Self {
+    pub fn new(
+        config: ParquetWriterConfig,
+        table_config: &TableConfig,
+    ) -> Result<Self, ParquetWriteError> {
         let sort_fields_string = table_config.effective_sort_fields().to_string();
-        let resolved_sort_fields = resolve_sort_fields(&sort_fields_string);
-        Self {
+        let resolved_sort_fields = resolve_sort_fields(&sort_fields_string)?;
+        Ok(Self {
             config,
             resolved_sort_fields,
             sort_fields_string,
-        }
+        })
     }
 
     /// Get the writer configuration.
@@ -210,7 +213,7 @@ impl ParquetWriter {
                     .map(|idx| SortingColumn {
                         column_idx: idx as i32,
                         descending: sf.descending,
-                        nulls_first: true,
+                        nulls_first: false,
                     })
             })
             .collect()
@@ -233,7 +236,7 @@ impl ParquetWriter {
                         values: Arc::clone(batch.column(idx)),
                         options: Some(SortOptions {
                             descending: sf.descending,
-                            nulls_first: true,
+                            nulls_first: false,
                         }),
                     })
             })
@@ -277,7 +280,7 @@ impl ParquetWriter {
                                 values: Arc::clone(sorted_batch.column(idx)),
                                 options: Some(SortOptions {
                                     descending: sf.descending,
-                                    nulls_first: true,
+                                    nulls_first: false,
                                 }),
                             })
                     })
@@ -321,6 +324,16 @@ impl ParquetWriter {
             }
         }
 
+        // Phase 1b: sorted_series immediately after sort schema columns.
+        // It encodes the same information and benefits from early arrival
+        // during streaming reads, but is not in the sort schema string.
+        if let Ok(idx) = schema.index_of(crate::sorted_series::SORTED_SERIES_COLUMN)
+            && !used[idx]
+        {
+            ordered_indices.push(idx);
+            used[idx] = true;
+        }
+
         // Phase 2: remaining columns, alphabetically by name.
         let mut remaining: Vec<(usize, &str)> = schema
             .fields()
@@ -352,7 +365,7 @@ impl ParquetWriter {
             .expect("reorder_columns: schema and columns must be consistent")
     }
 
-    /// Validate, sort, reorder columns, and build WriterProperties for a batch.
+    /// Validate, compute derived columns, sort, reorder, and build WriterProperties.
     fn prepare_write(
         &self,
         batch: &RecordBatch,
@@ -367,7 +380,15 @@ impl ParquetWriter {
             validate_required_fields(&batch.schema())
         }
         .map_err(|e| ParquetWriteError::SchemaValidation(e.to_string()))?;
-        let sorted_batch = self.reorder_columns(&self.sort_batch(batch)?);
+
+        // Compute sorted_series column before sorting — the column is derived
+        // from the tag columns and timeseries_id, so it must exist before the
+        // sort step can include it in the physical ordering.
+        let batch =
+            crate::sorted_series::append_sorted_series_column(&self.sort_fields_string, batch)
+                .map_err(|e| ParquetWriteError::SchemaValidation(e.to_string()))?;
+
+        let sorted_batch = self.reorder_columns(&self.sort_batch(&batch)?);
 
         let kv_metadata = split_metadata.map(build_compaction_key_value_metadata);
 
@@ -434,16 +455,11 @@ impl ParquetWriter {
 ///
 /// Columns not present in the current schema (e.g., `timeseries_id`) are silently
 /// skipped — they are recorded in the metadata string but do not affect physical sort.
-fn resolve_sort_fields(sort_fields_str: &str) -> Vec<ResolvedSortField> {
-    let schema = match parse_sort_fields(sort_fields_str) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!(sort_fields = sort_fields_str, error = %e, "failed to parse sort fields, using empty sort order");
-            return Vec::new();
-        }
-    };
+fn resolve_sort_fields(sort_fields_str: &str) -> Result<Vec<ResolvedSortField>, ParquetWriteError> {
+    let schema = parse_sort_fields(sort_fields_str)
+        .map_err(|e| ParquetWriteError::SchemaValidation(e.to_string()))?;
 
-    schema
+    Ok(schema
         .column
         .iter()
         .map(|col| {
@@ -454,7 +470,7 @@ fn resolve_sort_fields(sort_fields_str: &str) -> Vec<ResolvedSortField> {
                 descending,
             }
         })
-        .collect()
+        .collect())
 }
 
 #[cfg(test)]
@@ -462,7 +478,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::{
-        ArrayRef, DictionaryArray, Float64Array, StringArray, UInt8Array, UInt64Array,
+        ArrayRef, DictionaryArray, Float64Array, Int64Array, StringArray, UInt8Array, UInt64Array,
     };
     use arrow::datatypes::{DataType, Field, Int32Type, Schema};
 
@@ -476,13 +492,13 @@ mod tests {
     #[test]
     fn test_writer_creation() {
         let config = ParquetWriterConfig::default();
-        let _writer = ParquetWriter::new(config, &TableConfig::default());
+        let _writer = ParquetWriter::new(config, &TableConfig::default()).unwrap();
     }
 
     #[test]
     fn test_write_to_bytes() {
         let config = ParquetWriterConfig::default();
-        let writer = ParquetWriter::new(config, &TableConfig::default());
+        let writer = ParquetWriter::new(config, &TableConfig::default()).unwrap();
 
         let batch = create_test_batch();
         let bytes = writer.write_to_bytes(&batch, None).unwrap();
@@ -494,7 +510,7 @@ mod tests {
     #[test]
     fn test_write_to_file() {
         let config = ParquetWriterConfig::default();
-        let writer = ParquetWriter::new(config, &TableConfig::default());
+        let writer = ParquetWriter::new(config, &TableConfig::default()).unwrap();
 
         let batch = create_test_batch();
         let temp_dir = std::env::temp_dir();
@@ -511,7 +527,7 @@ mod tests {
     #[test]
     fn test_schema_validation_missing_field() {
         let config = ParquetWriterConfig::default();
-        let writer = ParquetWriter::new(config, &TableConfig::default());
+        let writer = ParquetWriter::new(config, &TableConfig::default()).unwrap();
 
         // Create a batch missing required fields
         let wrong_schema = Arc::new(Schema::new(vec![Field::new(
@@ -537,7 +553,7 @@ mod tests {
         use super::super::config::Compression;
 
         let config = ParquetWriterConfig::new().with_compression(Compression::Snappy);
-        let writer = ParquetWriter::new(config, &TableConfig::default());
+        let writer = ParquetWriter::new(config, &TableConfig::default()).unwrap();
 
         let batch = create_test_batch();
         let bytes = writer.write_to_bytes(&batch, None).unwrap();
@@ -553,7 +569,7 @@ mod tests {
         use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
         let config = ParquetWriterConfig::default();
-        let writer = ParquetWriter::new(config, &TableConfig::default());
+        let writer = ParquetWriter::new(config, &TableConfig::default()).unwrap();
 
         // Create a schema with required fields + service tag for sort verification
         let schema = Arc::new(Schema::new(vec![
@@ -565,6 +581,7 @@ mod tests {
             Field::new("metric_type", DataType::UInt8, false),
             Field::new("timestamp_secs", DataType::UInt64, false),
             Field::new("value", DataType::Float64, false),
+            Field::new("timeseries_id", DataType::Int64, false),
             Field::new(
                 "service",
                 DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -588,6 +605,7 @@ mod tests {
         let metric_type: ArrayRef = Arc::new(UInt8Array::from(vec![0u8, 0, 0]));
         let timestamp_secs: ArrayRef = Arc::new(UInt64Array::from(vec![300u64, 100u64, 200u64]));
         let value: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0]));
+        let timeseries_id: ArrayRef = Arc::new(Int64Array::from(vec![1i64, 2, 1]));
 
         let service: ArrayRef = {
             let keys = arrow::array::Int32Array::from(vec![Some(0i32), Some(1), Some(0)]);
@@ -597,7 +615,14 @@ mod tests {
 
         let batch = RecordBatch::try_new(
             schema,
-            vec![metric_name, metric_type, timestamp_secs, value, service],
+            vec![
+                metric_name,
+                metric_type,
+                timestamp_secs,
+                value,
+                timeseries_id,
+                service,
+            ],
         )
         .unwrap();
 
@@ -689,7 +714,7 @@ mod tests {
         use crate::split::{ParquetSplitId, TimeRange};
 
         let config = ParquetWriterConfig::default();
-        let writer = ParquetWriter::new(config, &TableConfig::default());
+        let writer = ParquetWriter::new(config, &TableConfig::default()).unwrap();
 
         let batch = create_test_batch();
 
@@ -742,7 +767,7 @@ mod tests {
         use parquet::file::reader::{FileReader, SerializedFileReader};
 
         let config = ParquetWriterConfig::default();
-        let writer = ParquetWriter::new(config, &TableConfig::default());
+        let writer = ParquetWriter::new(config, &TableConfig::default()).unwrap();
 
         let batch = create_test_batch();
         let temp_dir = std::env::temp_dir();
@@ -801,7 +826,7 @@ mod tests {
             .build();
 
         let config = ParquetWriterConfig::default();
-        let writer = ParquetWriter::new(config, &TableConfig::default());
+        let writer = ParquetWriter::new(config, &TableConfig::default()).unwrap();
         let batch = create_test_batch();
 
         let temp_dir = std::env::temp_dir();
@@ -980,7 +1005,7 @@ mod tests {
         // Default metrics sort fields: metric_name|service|env|datacenter|region|host|
         //                               timeseries_id|timestamp_secs
         let config = ParquetWriterConfig::default();
-        let writer = ParquetWriter::new(config, &TableConfig::default());
+        let writer = ParquetWriter::new(config, &TableConfig::default()).unwrap();
 
         // Create a batch with columns in a deliberately scrambled order.
         // The tag columns (service, env, region, host) plus two extra data
@@ -1010,8 +1035,8 @@ mod tests {
         let names: Vec<String> = schema.fields().iter().map(|f| f.name().clone()).collect();
 
         // Sort schema columns that are present should come first, in sort order.
-        // From the default: metric_name, service, env, region, host, timestamp_secs
-        // (datacenter and timeseries_id are not in the batch).
+        // From the default: metric_name, service, env, region, host, timeseries_id,
+        // timestamp_secs (datacenter is not in the batch).
         // metric_type and value are required fields but NOT sort columns.
         let expected_prefix = [
             "metric_name",
@@ -1019,6 +1044,7 @@ mod tests {
             "env",
             "region",
             "host",
+            "timeseries_id",
             "timestamp_secs",
         ];
         let sort_prefix: Vec<&str> = names
@@ -1058,7 +1084,7 @@ mod tests {
         use parquet::file::reader::{FileReader, SerializedFileReader};
 
         let config = ParquetWriterConfig::default();
-        let writer = ParquetWriter::new(config, &TableConfig::default());
+        let writer = ParquetWriter::new(config, &TableConfig::default()).unwrap();
 
         let batch = create_test_batch_with_tags(3, &["host", "zzz_extra", "env", "service"]);
 
@@ -1076,15 +1102,19 @@ mod tests {
             .map(|i| parquet_schema.column(i).name().to_string())
             .collect();
 
-        // Sort columns first: metric_name, service, env, host, timestamp_secs
+        // Sort columns first: metric_name, service, env, host, timeseries_id,
+        // timestamp_secs
+        // Then sorted_series (computed column, placed after sort columns)
         // Then remaining alphabetically: metric_type, value, zzz_extra
         assert_eq!(col_names[0], "metric_name");
         assert_eq!(col_names[1], "service");
         assert_eq!(col_names[2], "env");
         assert_eq!(col_names[3], "host");
-        assert_eq!(col_names[4], "timestamp_secs");
+        assert_eq!(col_names[4], "timeseries_id");
+        assert_eq!(col_names[5], "timestamp_secs");
+        assert_eq!(col_names[6], "sorted_series");
 
-        let remaining = &col_names[5..];
+        let remaining = &col_names[7..];
         let mut sorted = remaining.to_vec();
         sorted.sort();
         assert_eq!(remaining, &sorted, "data columns should be alphabetical");
