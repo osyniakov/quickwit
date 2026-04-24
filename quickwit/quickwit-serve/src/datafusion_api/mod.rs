@@ -12,14 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod basic_tests;
-mod ingest_v1_tests;
-mod ingest_v2_tests;
-#[cfg(feature = "datafusion")]
-mod metrics_distributed_tests;
-mod no_cp_tests;
-mod otlp_tests;
-#[cfg(feature = "sqs-localstack-tests")]
-mod sqs_tests;
-mod tls_tests;
-mod update_tests;
+//! DataFusion wiring for `quickwit-serve`.
+//!
+//! The whole module is gated behind the `datafusion` feature (see `lib.rs`).
+//! [`setup`] builds the session at startup and mounts the gRPC services;
+//! `lib.rs` and `grpc.rs` each have a single `#[cfg(feature = "datafusion")]`
+//! call site into this module.
+
+pub(crate) mod setup;
