@@ -1,0 +1,43 @@
+version: 0.7
+
+index_id: events
+
+doc_mapping:
+  mode: dynamic
+  field_mappings:
+    - name: ts
+      type: datetime
+      input_formats:
+        - rfc3339
+        - unix_timestamp
+      output_format: rfc3339
+      fast: true
+    - name: level
+      type: text
+      tokenizer: raw
+      fast: true
+    - name: service
+      type: text
+      tokenizer: raw
+      fast: true
+    - name: message
+      type: text
+      tokenizer: default
+      record: position
+    - name: status
+      type: u64
+      stored: true
+      indexed: true
+      fast: true
+    - name: latency_ms
+      type: f64
+      stored: true
+      indexed: true
+      fast: true
+  timestamp_field: ts
+
+indexing_settings:
+  commit_timeout_secs: 5
+
+search_settings:
+  default_search_fields: [message]
