@@ -123,7 +123,12 @@ pub fn parse_timestamp_str(timestamp_str: &str) -> Option<TantivyDateTime> {
         if let Ok(timestamp_secs @ MIN_TIMESTAMP_SECONDS..=MAX_TIMESTAMP_SECONDS) =
             timestamp_secs_str.parse::<i64>()
         {
-            let num_subsecond_digits = subsecond_digits_str.len().min(9);
+            let num_subsecond_digits = subsecond_digits_str
+                .as_bytes()
+                .iter()
+                .position(|b| !b.is_ascii_digit())
+                .unwrap_or(subsecond_digits_str.len())
+                .min(9);
 
             if let Ok(subsecond_digits) =
                 subsecond_digits_str[..num_subsecond_digits].parse::<i64>()
