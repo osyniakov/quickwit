@@ -23,6 +23,7 @@ anstyle-parse,https://github.com/rust-cli/anstyle,MIT OR Apache-2.0,The anstyle-
 anstyle-query,https://github.com/rust-cli/anstyle,MIT OR Apache-2.0,The anstyle-query Authors
 anstyle-wincon,https://github.com/rust-cli/anstyle,MIT OR Apache-2.0,The anstyle-wincon Authors
 anyhow,https://github.com/dtolnay/anyhow,MIT OR Apache-2.0,David Tolnay <dtolnay@gmail.com>
+arbitrary,https://github.com/rust-fuzz/arbitrary,MIT OR Apache-2.0,"The Rust-Fuzz Project Developers, Nick Fitzgerald <fitzgen@gmail.com>, Manish Goregaokar <manishsmail@gmail.com>, Simonas Kazlauskas <arbitrary@kazlauskas.me>, Brian L. Troutwine <brian@troutwine.us>, Corey Farwell <coreyf@rwell.org>"
 arc-swap,https://github.com/vorner/arc-swap,MIT OR Apache-2.0,Michal 'vorner' Vaner <vorner@vorner.cz>
 arrayref,https://github.com/droundy/arrayref,BSD-2-Clause,David Roundy <roundyd@physics.oregonstate.edu>
 arrayvec,https://github.com/bluss/arrayvec,MIT OR Apache-2.0,bluss
@@ -448,6 +449,7 @@ libc,https://github.com/rust-lang/libc,MIT OR Apache-2.0,The Rust Project Develo
 libloading,https://github.com/nagisa/rust_libloading,ISC,Simonas Kazlauskas <libloading@kazlauskas.me>
 liblzma,https://github.com/portable-network-archive/liblzma-rs,MIT OR Apache-2.0,"Alex Crichton <alex@alexcrichton.com>, Portable-Network-Archive Developers"
 liblzma-sys,https://github.com/portable-network-archive/liblzma-rs,MIT OR Apache-2.0,"Alex Crichton <alex@alexcrichton.com>, Portable-Network-Archive Developers"
+libfuzzer-sys,https://github.com/rust-fuzz/libfuzzer,(MIT OR Apache-2.0) AND NCSA,The rust-fuzz Project Developers
 libm,https://github.com/rust-lang/compiler-builtins,MIT,"Alex Crichton <alex@alexcrichton.com>, Amanieu d'Antras <amanieu@gmail.com>, Jorge Aparicio <japaricious@gmail.com>, Trevor Gross <tg@trevorgross.com>"
 libredox,https://gitlab.redox-os.org/redox-os/libredox,MIT,4lDO2 <4lDO2@protonmail.com>
 libsqlite3-sys,https://github.com/rusqlite/rusqlite,MIT,The rusqlite developers

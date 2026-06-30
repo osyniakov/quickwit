@@ -1,0 +1,68 @@
+[package]
+name = "quickwit-fuzz"
+version = "0.0.0"
+publish = false
+edition.workspace = true
+license.workspace = true
+
+[package.metadata]
+cargo-fuzz = true
+
+[profile.release]
+debug = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = { workspace = true }
+quickwit-datetime = { workspace = true }
+quickwit-doc-mapper = { workspace = true }
+quickwit-opentelemetry = { workspace = true }
+quickwit-query = { workspace = true }
+
+[[bin]]
+name = "fuzz_query_dsl"
+path = "fuzz_targets/fuzz_query_dsl.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_query_string"
+path = "fuzz_targets/fuzz_query_string.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_datetime"
+path = "fuzz_targets/fuzz_datetime.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_doc_mapper"
+path = "fuzz_targets/fuzz_doc_mapper.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_doc_mapper_config"
+path = "fuzz_targets/fuzz_doc_mapper_config.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_java_datetime_format"
+path = "fuzz_targets/fuzz_java_datetime_format.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_otlp_logs"
+path = "fuzz_targets/fuzz_otlp_logs.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_otlp_spans"
+path = "fuzz_targets/fuzz_otlp_spans.rs"
+test = false
+doc = false
