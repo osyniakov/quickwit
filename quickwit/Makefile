@@ -85,3 +85,26 @@ rm-postgres:
 update-licenses:
 	 dd-rust-license-tool --config license-tool.toml write
 	 mv LICENSE-3rdparty.csv ../LICENSE-3rdparty.csv
+
+# Usage:
+# `make fuzz-build` builds every fuzz target.
+# `make fuzz-run FUZZ_TARGET=ingest_document FUZZ_SECONDS=600` fuzzes a single target.
+#
+# cargo-fuzz composes its own RUSTFLAGS and drops the `tokio_unstable` cfg that
+# .cargo/config.toml sets, so it has to be passed through the environment.
+FUZZ_TARGET ?= search_query_string
+FUZZ_SECONDS ?= 300
+FUZZ_RUSTFLAGS = --cfg tokio_unstable
+
+.PHONY: fuzz-build
+fuzz-build:
+	@echo "Building fuzz targets"
+	@(command -v cargo-fuzz >/dev/null || (echo "cargo-fuzz is not installed. Please install using 'cargo +nightly install cargo-fuzz --locked'." && exit 1))
+	@RUSTFLAGS="$(FUZZ_RUSTFLAGS)" cargo +nightly fuzz build
+
+.PHONY: fuzz-run
+fuzz-run:
+	@echo "Fuzzing $(FUZZ_TARGET) for $(FUZZ_SECONDS)s"
+	@(command -v cargo-fuzz >/dev/null || (echo "cargo-fuzz is not installed. Please install using 'cargo +nightly install cargo-fuzz --locked'." && exit 1))
+	@RUSTFLAGS="$(FUZZ_RUSTFLAGS)" cargo +nightly fuzz run $(FUZZ_TARGET) \
+		fuzz/corpus/$(FUZZ_TARGET) fuzz/seeds/$(FUZZ_TARGET) -- -max_total_time=$(FUZZ_SECONDS)
