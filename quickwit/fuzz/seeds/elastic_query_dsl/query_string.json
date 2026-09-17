@@ -1,0 +1,8 @@
+{
+  "query_string": {
+    "query": "body:(quick OR brown) AND count:[1 TO 100}",
+    "fields": ["body", "attributes.level"],
+    "default_operator": "AND",
+    "lenient": true
+  }
+}
