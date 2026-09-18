@@ -439,18 +439,6 @@ pub fn es_compat_index_multi_search_handler(
         .boxed()
 }
 
-/// GET or POST _elastic/_search/scroll
-pub fn es_compat_scroll_handler(
-    search_service: Arc<dyn SearchService>,
-) -> impl Filter<Extract = (impl warp::Reply,), Error = Rejection> + Clone {
-    elastic_scroll_filter()
-        .and(with_arg(search_service))
-        .then(es_scroll)
-        .map(|result| make_elastic_api_response(result, BodyFormat::default()))
-        .recover(recover_fn)
-        .boxed()
-}
-
 pub(crate) fn es_compat_delete_scroll() -> Value {
     json!({
         "succeeded": true,
@@ -458,15 +446,34 @@ pub(crate) fn es_compat_delete_scroll() -> Value {
     })
 }
 
-/// DELETE _elastic/_search/scroll
+/// GET, POST, or DELETE _elastic/_search/scroll
 ///
-/// Clears a scroll context. Quickwit manages scroll lifetime via TTL,
-/// so this is a no-op that returns success.
-pub fn es_compat_delete_scroll_handler()
--> impl Filter<Extract = (impl warp::Reply,), Error = Rejection> + Clone {
-    elastic_delete_scroll_filter()
+/// DELETE clears a scroll context. Quickwit manages scroll lifetime via
+/// TTL, so this is a no-op that returns success.
+///
+/// The GET/POST and DELETE variants are combined into a single filter here,
+/// *before* `.recover()` is applied, rather than as two separately-recovered
+/// handlers `.or()`-ed together in `mod.rs`. `elastic_scroll_filter` rejects
+/// for any request that isn't GET/POST on this path (including every
+/// DELETE, since it also enforces a `Content-Length` header ahead of its
+/// own method check). If that rejection were recovered into a reply on its
+/// own, the DELETE-specific filter would never get a chance to run:
+/// `warp`'s `.or()` only tries its next alternative when the current one
+/// rejects, and `.recover()` turns a rejection into an `Ok` reply, which
+/// `.or()` treats as a completed match.
+pub fn es_compat_scroll_handler(
+    search_service: Arc<dyn SearchService>,
+) -> impl Filter<Extract = (impl warp::Reply,), Error = Rejection> + Clone {
+    let get_or_post_scroll = elastic_scroll_filter()
+        .and(with_arg(search_service))
+        .then(es_scroll)
+        .map(|result| make_elastic_api_response(result, BodyFormat::default()));
+    let delete_scroll = elastic_delete_scroll_filter()
         .then(|| async { Ok::<_, ElasticsearchError>(es_compat_delete_scroll()) })
-        .map(|result| make_elastic_api_response(result, BodyFormat::default()))
+        .map(|result| make_elastic_api_response(result, BodyFormat::default()));
+    get_or_post_scroll
+        .or(delete_scroll)
+        .unify()
         .recover(recover_fn)
         .boxed()
 }

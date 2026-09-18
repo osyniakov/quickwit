@@ -31,11 +31,10 @@ use quickwit_proto::metastore::MetastoreServiceClient;
 use quickwit_search::SearchService;
 pub use rest_handler::{
     es_compat_cat_indices_handler, es_compat_cluster_info_handler, es_compat_delete_index_handler,
-    es_compat_delete_scroll_handler, es_compat_index_cat_indices_handler,
-    es_compat_index_count_handler, es_compat_index_field_capabilities_handler,
-    es_compat_index_multi_search_handler, es_compat_index_search_handler,
-    es_compat_index_stats_handler, es_compat_resolve_index_handler, es_compat_scroll_handler,
-    es_compat_search_handler, es_compat_stats_handler,
+    es_compat_index_cat_indices_handler, es_compat_index_count_handler,
+    es_compat_index_field_capabilities_handler, es_compat_index_multi_search_handler,
+    es_compat_index_search_handler, es_compat_index_stats_handler, es_compat_resolve_index_handler,
+    es_compat_scroll_handler, es_compat_search_handler, es_compat_stats_handler,
 };
 use rest_handler::{
     es_compat_cluster_health_handler, es_compat_nodes_handler, es_compat_search_shards_handler,
@@ -90,7 +89,6 @@ pub fn elastic_api_handlers(
         .or(es_compat_index_search_handler(search_service.clone()))
         .or(es_compat_index_count_handler(search_service.clone()))
         .or(es_compat_scroll_handler(search_service.clone()))
-        .or(es_compat_delete_scroll_handler())
         .or(es_compat_index_multi_search_handler(search_service.clone()))
         .or(es_compat_index_field_capabilities_handler(
             search_service.clone(),
