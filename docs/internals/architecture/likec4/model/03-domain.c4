@@ -1,0 +1,49 @@
+model {
+  extend quickwit {
+    layer domain 'Domain Primitives' {
+      description 'Index-schema, query, configuration, and columnar/file-format primitives shared across the data plane.'
+
+      crate query 'quickwit-query' {
+        description 'Elasticsearch/OpenSearch-compatible Query DSL parsing.'
+      }
+      crate docMapper 'quickwit-doc-mapper' {
+        description 'Index/document schema mapping: JSON documents to tantivy documents, plus pruning tags.'
+      }
+      crate config 'quickwit-config' {
+        description 'Parses and validates node, index, source, and template configuration objects.'
+      }
+      crate directories 'quickwit-directories' {
+        description 'Tantivy Directory implementations backed by quickwit-storage (StorageDirectory, BundleDirectory, HotDirectory, CachingDirectory).'
+      }
+      crate transport 'quickwit-transport' {
+        description 'Node-to-node gRPC transport: channel construction and hot-reloadable TLS.'
+      }
+      crate parquetEngine 'quickwit-parquet-engine' {
+        description 'Parquet/DataFusion-based storage and query primitives, used as an alternative to tantivy for metrics data.'
+      }
+    }
+  }
+
+  quickwit.domain.query -> quickwit.foundation.common 'depends on'
+  quickwit.domain.query -> quickwit.foundation.datetime 'depends on'
+
+  quickwit.domain.docMapper -> quickwit.domain.query 'depends on'
+  quickwit.domain.docMapper -> quickwit.protocol.proto 'depends on'
+  quickwit.domain.docMapper -> quickwit.foundation.common 'depends on'
+  quickwit.domain.docMapper -> quickwit.foundation.datetime 'depends on'
+  quickwit.domain.docMapper -> quickwit.foundation.macros 'depends on'
+
+  quickwit.domain.config -> quickwit.domain.docMapper 'depends on'
+  quickwit.domain.config -> quickwit.protocol.proto 'depends on'
+  quickwit.domain.config -> quickwit.foundation.common 'depends on'
+
+  quickwit.domain.directories -> quickwit.foundation.common 'depends on'
+  quickwit.domain.directories -> quickwit.storage.storage 'depends on'
+
+  quickwit.domain.transport -> quickwit.domain.config 'depends on'
+  quickwit.domain.transport -> quickwit.foundation.metrics 'depends on'
+
+  quickwit.domain.parquetEngine -> quickwit.protocol.proto 'depends on'
+  quickwit.domain.parquetEngine -> quickwit.foundation.dst 'depends on'
+  quickwit.domain.parquetEngine -> quickwit.foundation.metrics 'depends on'
+}

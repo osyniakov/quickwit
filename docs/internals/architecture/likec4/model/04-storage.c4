@@ -1,0 +1,40 @@
+model {
+  extend quickwit {
+    layer storage 'Storage & Metadata' {
+      description 'Durable state: split bytes, index metadata, and cluster membership.'
+
+      crate storage 'quickwit-storage' {
+        description 'Multi-cloud storage abstraction (S3, Azure, GCS, local file, RAM) behind a single Storage trait.'
+      }
+      crate metastore 'quickwit-metastore' {
+        description 'Index metadata storage: file-backed for dev, PostgreSQL for production.'
+      }
+      crate cluster 'quickwit-cluster' {
+        description 'Cluster membership and failure detection via the Chitchat gossip protocol.'
+      }
+    }
+  }
+
+  quickwit.storage.storage -> quickwit.foundation.aws 'depends on'
+  quickwit.storage.storage -> quickwit.foundation.common 'depends on'
+  quickwit.storage.storage -> quickwit.foundation.metrics 'depends on'
+  quickwit.storage.storage -> quickwit.domain.config 'depends on'
+  quickwit.storage.storage -> quickwit.protocol.proto 'depends on'
+  quickwit.storage.storage -> objectStorage 'reads/writes splits & payloads on'
+
+  quickwit.storage.metastore -> quickwit.storage.storage 'depends on'
+  quickwit.storage.metastore -> quickwit.domain.config 'depends on'
+  quickwit.storage.metastore -> quickwit.domain.docMapper 'depends on'
+  quickwit.storage.metastore -> quickwit.domain.query 'depends on'
+  quickwit.storage.metastore -> quickwit.domain.parquetEngine 'depends on'
+  quickwit.storage.metastore -> quickwit.foundation.common 'depends on'
+  quickwit.storage.metastore -> quickwit.foundation.metrics 'depends on'
+  quickwit.storage.metastore -> quickwit.protocol.proto 'depends on'
+  quickwit.storage.metastore -> rdbms 'reads/writes index metadata on (production)'
+
+  quickwit.storage.cluster -> quickwit.domain.config 'depends on'
+  quickwit.storage.cluster -> quickwit.domain.transport 'depends on'
+  quickwit.storage.cluster -> quickwit.foundation.common 'depends on'
+  quickwit.storage.cluster -> quickwit.foundation.metrics 'depends on'
+  quickwit.storage.cluster -> quickwit.protocol.proto 'depends on'
+}

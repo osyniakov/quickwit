@@ -1,0 +1,80 @@
+model {
+  extend quickwit {
+    layer entrypoints 'API Surface & Entry Points' {
+      description 'What operators and other processes actually run or call. Everything below exists to serve this layer.'
+
+      crate serve 'quickwit-serve' {
+        #entrypoint
+        description 'Hosts the REST and gRPC APIs over the same service traits, wires together every platform service, and serves the embedded UI.'
+      }
+      crate cli 'quickwit-cli' {
+        #entrypoint
+        description 'The `quickwit` CLI binary: run/start a node, manage indexes, ingest files, and other operator commands.'
+      }
+      crate restClient 'quickwit-rest-client' {
+        description 'Rust client library for the Quickwit REST API. Depends on quickwit-serve to reuse its request/response DTOs.'
+      }
+      frontend ui 'quickwit-ui' {
+        #entrypoint
+        description 'React/TypeScript single-page app embedded into and served by quickwit-serve. Not part of the Cargo workspace.'
+      }
+    }
+  }
+
+  quickwit.entrypoints.serve -> quickwit.protocol.actors 'depends on'
+  quickwit.entrypoints.serve -> quickwit.storage.cluster 'depends on'
+  quickwit.entrypoints.serve -> quickwit.foundation.common 'depends on'
+  quickwit.entrypoints.serve -> quickwit.dataplane.compaction 'depends on'
+  quickwit.entrypoints.serve -> quickwit.domain.config 'depends on'
+  quickwit.entrypoints.serve -> quickwit.platform.controlPlane 'depends on'
+  quickwit.entrypoints.serve -> quickwit.platform.datafusion 'depends on'
+  quickwit.entrypoints.serve -> quickwit.domain.docMapper 'depends on'
+  quickwit.entrypoints.serve -> quickwit.platform.indexManagement 'depends on'
+  quickwit.entrypoints.serve -> quickwit.dataplane.indexing 'depends on'
+  quickwit.entrypoints.serve -> quickwit.dataplane.ingest 'depends on'
+  quickwit.entrypoints.serve -> quickwit.platform.jaeger 'depends on'
+  quickwit.entrypoints.serve -> quickwit.platform.janitor 'depends on'
+  quickwit.entrypoints.serve -> quickwit.platform.lambdaClient 'depends on'
+  quickwit.entrypoints.serve -> quickwit.storage.metastore 'depends on'
+  quickwit.entrypoints.serve -> quickwit.foundation.metrics 'depends on'
+  quickwit.entrypoints.serve -> quickwit.dataplane.opentelemetry 'depends on'
+  quickwit.entrypoints.serve -> quickwit.protocol.proto 'depends on'
+  quickwit.entrypoints.serve -> quickwit.domain.query 'depends on'
+  quickwit.entrypoints.serve -> quickwit.dataplane.search 'depends on'
+  quickwit.entrypoints.serve -> quickwit.storage.storage 'depends on'
+  quickwit.entrypoints.serve -> quickwit.platform.telemetryExporters 'depends on'
+  quickwit.entrypoints.serve -> quickwit.domain.transport 'depends on'
+  quickwit.entrypoints.serve -> quickwit.storage.storage 'stores splits & payloads on'
+
+  quickwit.entrypoints.cli -> quickwit.protocol.actors 'depends on'
+  quickwit.entrypoints.cli -> quickwit.storage.cluster 'depends on'
+  quickwit.entrypoints.cli -> quickwit.foundation.common 'depends on'
+  quickwit.entrypoints.cli -> quickwit.domain.config 'depends on'
+  quickwit.entrypoints.cli -> quickwit.platform.indexManagement 'depends on'
+  quickwit.entrypoints.cli -> quickwit.dataplane.indexing 'depends on'
+  quickwit.entrypoints.cli -> quickwit.dataplane.ingest 'depends on'
+  quickwit.entrypoints.cli -> quickwit.storage.metastore 'depends on'
+  quickwit.entrypoints.cli -> quickwit.foundation.metrics 'depends on'
+  quickwit.entrypoints.cli -> quickwit.protocol.proto 'depends on'
+  quickwit.entrypoints.cli -> quickwit.entrypoints.restClient 'depends on'
+  quickwit.entrypoints.cli -> quickwit.dataplane.search 'depends on'
+  quickwit.entrypoints.cli -> quickwit.entrypoints.serve 'depends on'
+  quickwit.entrypoints.cli -> quickwit.storage.storage 'depends on'
+  quickwit.entrypoints.cli -> quickwit.platform.telemetryExporters 'depends on'
+  quickwit.entrypoints.cli -> quickwit.domain.transport 'depends on'
+
+  quickwit.entrypoints.restClient -> quickwit.storage.cluster 'depends on'
+  quickwit.entrypoints.restClient -> quickwit.foundation.common 'depends on'
+  quickwit.entrypoints.restClient -> quickwit.domain.config 'depends on'
+  quickwit.entrypoints.restClient -> quickwit.dataplane.indexing 'depends on'
+  quickwit.entrypoints.restClient -> quickwit.dataplane.ingest 'depends on'
+  quickwit.entrypoints.restClient -> quickwit.storage.metastore 'depends on'
+  quickwit.entrypoints.restClient -> quickwit.protocol.proto 'depends on'
+  quickwit.entrypoints.restClient -> quickwit.entrypoints.serve 'depends on (reuses REST DTOs)'
+
+  quickwit.entrypoints.ui -> quickwit.entrypoints.serve 'calls REST API of'
+
+  operator -> quickwit.entrypoints.cli 'runs'
+  operator -> quickwit.entrypoints.ui 'browses'
+  operator -> quickwit.entrypoints.serve 'sends REST/gRPC requests to'
+}

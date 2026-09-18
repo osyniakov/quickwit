@@ -1,0 +1,30 @@
+model {
+  extend quickwit {
+    layer testing 'Cross-Cutting Test Infrastructure' {
+      description 'Exercises the real stack end-to-end. Never a dependency of any production crate — arrows only point out of this layer.'
+
+      crate integrationTests 'quickwit-integration-tests' {
+        #testOnly
+        description 'Spins up a real quickwit-cli/quickwit-serve instance and drives it through the REST API for end-to-end tests.'
+      }
+    }
+  }
+
+  quickwit.testing.integrationTests -> quickwit.protocol.actors 'depends on'
+  quickwit.testing.integrationTests -> quickwit.entrypoints.cli 'depends on'
+  quickwit.testing.integrationTests -> quickwit.foundation.common 'depends on'
+  quickwit.testing.integrationTests -> quickwit.domain.config 'depends on'
+  quickwit.testing.integrationTests -> quickwit.platform.controlPlane 'depends on'
+  quickwit.testing.integrationTests -> quickwit.platform.datafusion 'depends on'
+  quickwit.testing.integrationTests -> quickwit.dataplane.indexing 'depends on'
+  quickwit.testing.integrationTests -> quickwit.dataplane.ingest 'depends on'
+  quickwit.testing.integrationTests -> quickwit.storage.metastore 'depends on'
+  quickwit.testing.integrationTests -> quickwit.dataplane.opentelemetry 'depends on'
+  quickwit.testing.integrationTests -> quickwit.domain.parquetEngine 'depends on'
+  quickwit.testing.integrationTests -> quickwit.protocol.proto 'depends on'
+  quickwit.testing.integrationTests -> quickwit.entrypoints.restClient 'depends on'
+  quickwit.testing.integrationTests -> quickwit.dataplane.search 'depends on'
+  quickwit.testing.integrationTests -> quickwit.entrypoints.serve 'depends on'
+  quickwit.testing.integrationTests -> quickwit.storage.storage 'depends on'
+  quickwit.testing.integrationTests -> quickwit.domain.transport 'depends on'
+}

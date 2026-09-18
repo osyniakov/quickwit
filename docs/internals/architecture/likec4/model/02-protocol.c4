@@ -1,0 +1,20 @@
+model {
+  extend quickwit {
+    layer protocol 'Protocol & Actor Core' {
+      description 'The gRPC contracts and the actor runtime that every service and pipeline is built from.'
+
+      crate proto 'quickwit-proto' {
+        description 'Protobuf-generated gRPC service traits and message types for all inter-service communication.'
+      }
+      crate actors 'quickwit-actors' {
+        description 'Lightweight, custom actor framework (mailboxes, supervision, observability) underlying the indexing pipeline and several services.'
+      }
+    }
+  }
+
+  quickwit.protocol.proto -> quickwit.protocol.actors 'depends on'
+  quickwit.protocol.proto -> quickwit.foundation.common 'depends on'
+  quickwit.protocol.proto -> quickwit.foundation.codegen 'depends on'
+  quickwit.protocol.actors -> quickwit.foundation.common 'depends on'
+  quickwit.protocol.actors -> quickwit.foundation.metrics 'depends on'
+}

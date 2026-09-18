@@ -1,0 +1,36 @@
+model {
+  person operator 'Operator / API Client' {
+    description 'A human running the CLI, or a service/end-user calling the REST or gRPC API.'
+  }
+
+  externalSystem objectStorage 'Cloud Object Storage' {
+    description 'AWS S3, Google Cloud Storage, Azure Blob Storage, or any S3-compatible store. Holds index splits and other payloads.'
+  }
+
+  externalSystem rdbms 'PostgreSQL' {
+    description 'Production backend for the metastore. A local file or a single object on cloud storage substitutes in single-node/dev deployments.'
+  }
+
+  externalSystem messageQueues 'Message Queues' {
+    description 'Kafka, Pulsar, Amazon Kinesis, Amazon SQS, or Google Pub/Sub sources that indexers consume from with exactly-once semantics.'
+  }
+
+  externalSystem otelClients 'OTel SDKs & Collectors' {
+    description 'Applications and collectors exporting OTLP traces, logs, and metrics to Quickwit.'
+  }
+
+  externalSystem awsLambda 'AWS Lambda' {
+    description 'Serverless execution environment that runs the leaf-search Lambda function for the stateless search offload path.'
+  }
+
+  system quickwit 'Quickwit' {
+    description 'Cloud-native distributed search engine for observability data (logs, traces, metrics).'
+  }
+
+  operator -> quickwit 'runs CLI commands, sends REST/gRPC requests to'
+  quickwit -> objectStorage 'stores/reads splits & payloads on'
+  quickwit -> rdbms 'stores/reads index metadata on (production)'
+  quickwit -> messageQueues 'consumes records from'
+  otelClients -> quickwit 'exports OTLP traces/logs/metrics to'
+  quickwit -> awsLambda 'invokes leaf-search functions on'
+}
