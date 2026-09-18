@@ -3,7 +3,9 @@
 End-to-end check that StarRocks's Elasticsearch external catalog
 (`type = "es"`) can read indices stored in Quickwit.
 
-See **[REPORT.md](./REPORT.md)** for the gap analysis.
+See **[REPORT.md](./REPORT.md)** for the gap analysis (see its §0 for
+the 2026-09-18 status update: of the 6 gaps originally found, only 3
+remain open on `main`).
 
 ## Layout
 
