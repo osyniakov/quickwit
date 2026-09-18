@@ -81,53 +81,62 @@ python3 fuzz/scripts/generate_protobuf_seeds.py
 
 Rerun it if the OTLP protos are ever renumbered.
 
-## Known findings
+## Findings
 
-The first run of these targets found three crashes. They are recorded here rather
-than added to `seeds/`, because a seed that crashes on load makes a target useless.
-Until they are fixed, CI will flag them.
+The first runs found three crashes across two distinct bugs. Both are fixed. The
+reproducers are described here rather than added to `seeds/`, because a seed that
+crashes on load makes a target useless.
 
-**1. Underflow on an inverted span duration** — `otlp_traces_json`,
-`otlp_traces_protobuf`, found after 6k executions.
+**1. Underflow on an inverted span duration** — `otlp_traces_json` and
+`otlp_traces_protobuf`, first hit after 6k executions. Fixed in
+`quickwit-opentelemetry/src/otlp/traces.rs`, covered by
+`test_span_from_otlp_clamps_inverted_duration`.
 
-`quickwit-opentelemetry/src/otlp/traces.rs:270` computes
+`span.end_time_unix_nano - span.start_time_unix_nano` on two `u64`s underflowed when
+a span ended before it started: a panic under debug assertions, and in a release
+build without overflow checks a wrap to a ~584-year duration that quietly corrupts
+any duration aggregation over the index. A sender whose clock stepped backwards
+mid-span produces one, so it never required a hostile client.
 
-```rust
-let span_duration_nanos = span.end_time_unix_nano - span.start_time_unix_nano;
-```
-
-Both sides are `u64`, so a span whose end precedes its start underflows. With debug
-assertions on, the OTLP ingest task panics; in a release build without overflow
-checks it wraps instead, and the span is indexed with a duration of roughly 584
-years, which quietly corrupts any duration aggregation over that index. An OTLP
-client only needs a clock that stepped backwards mid-span to produce one, so this
-does not require a hostile sender.
+The duration is now clamped to zero and the anomaly logged, rather than rejected:
+`parse_otlp_spans` propagates the first error, so failing the span would have
+discarded every other span in the same export batch. The received timestamps are
+still indexed as sent, so the skew stays visible.
 
 **2. Panic on a query string of `*` followed by a control character** —
-`search_query_string`, found after 170k executions. Minimal reproducer is two bytes:
-`0x2A 0x0C` (`*` then a form feed), i.e. `GET /api/v1/{index}/search?query=*%0C`.
-
-The panic is upstream, at `query-grammar/src/user_input_ast.rs:51` in the pinned
-tantivy revision:
-
-```rust
-UserInputLeaf::Exists { field: _ } => UserInputLeaf::Exists {
-    field: field.expect("Exist query without a field isn't allowed"),
-},
-```
+`search_query_string`, first hit after 170k executions. Minimal reproducer is two
+bytes, `0x2A 0x0C` (`*` then a form feed), i.e.
+`GET /api/v1/{index}/search?query=*%0C`. Fixed upstream; picked up here by moving the
+tantivy pin to `20d7f72f`.
 
 `*` parses to `UserInputLeaf::All`, which `set_default_field` rewrites into an
-`Exists` leaf, and a later `set_field(None)` then hits the `expect`. Quickwit cannot
-guard this from the outside, since the panic happens inside `parse_query`; the fix
-belongs in tantivy.
+`Exists` leaf, and a later `set_field(None)` hit an `expect` in
+`query-grammar/src/user_input_ast.rs`. Quickwit could not guard it from the outside,
+since the panic happened inside `parse_query`; upstream now folds that case back to
+`UserInputLeaf::All`.
 
-Targets that came back clean, at 45 seconds each: `otlp_logs_protobuf` (3.1M
-executions), `elastic_query_dsl` (3.0M), `otlp_logs_json` (2.8M), `ingest_document`
-(1.4M) and `index_config` (193k — the slowest target, since every input is parsed
-three times and a clean parse then builds a doc mapper).
+### Where the targets stand
 
-Forty-five seconds is a smoke run, not a campaign. "Clean" above means no shallow
-crash, not no bug; the batch workflow is what actually explores these.
+After both fixes, 120 seconds each unless noted:
+
+| Target | Executions | Result |
+| --- | --- | --- |
+| `otlp_traces_json` | 8.9M (240s) | clean |
+| `otlp_traces_protobuf` | 8.9M (240s) | clean |
+| `elastic_query_dsl` | 6.1M | clean |
+| `otlp_logs_json` | 5.3M | clean |
+| `otlp_logs_protobuf` | 5.0M | clean |
+| `ingest_document` | 3.5M | clean |
+| `search_query_string` | 1.3M | clean |
+| `index_config` | 506k | clean |
+
+`index_config` is slowest because every input is parsed three times and a clean parse
+then builds a doc mapper. `otlp_traces_protobuf` went from 43k executions to 8.9M
+once the underflow was fixed: a crashing target stops exploring, so its pre-fix
+numbers said little about the code behind the crash.
+
+Minutes are still a smoke run, not a campaign. "Clean" means no shallow crash, not no
+bug; the batch workflow is what actually explores these.
 
 ## Reproducing a crash
 
