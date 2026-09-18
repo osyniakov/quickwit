@@ -4,8 +4,9 @@
 (`type = "es"`) can read indices stored in Quickwit, with Quickwit acting
 as a drop-in Elasticsearch endpoint.
 
-**Date.** 2026-04-26 (live run); source-reviewed against `main` again on
-2026-09-18 — see **§0**.
+**Date.** 2026-04-26 (live run, StarRocks + shim + Quickwit image);
+re-verified against `main` on 2026-09-18 by building the `quickwit`
+binary from source and curling it directly — see **§0**.
 **Quickwit images probed.** `quickwit/quickwit:0.8.0` (the published
 release) and `quickwit/quickwit:edge` (built from `main`). Differences
 between the two are called out per gap.
@@ -19,35 +20,41 @@ that directory; results land in `artifacts/run.log`.
 ## 0. Status update — 2026-09-18
 
 This branch was rebased onto `main` (274 commits landed since the
-original run, including `main`'s own `[0.9.0]` changelog entries). No
-Docker registry access was available in the sandbox this update ran in
-(image pulls to Docker Hub are blocked by the environment's network
-policy), so the stack in §2 could not be re-run live. Instead, every
-gap in §4 was re-checked by reading the current
-`quickwit-serve/src/elasticsearch_api/` source directly. Findings:
+original run, including `main`'s own `[0.9.0]` changelog entries).
+Docker registry access was unavailable in the sandbox this update ran
+in (image pulls to Docker Hub are blocked by the environment's network
+policy), so the full StarRocks stack in §2 could not be re-run. Instead:
+`cargo build --release -p quickwit-cli` was used to build the actual
+`quickwit` binary from this repo's synced `main` (commit `cef9a47`,
+reported by the binary itself as `0.9.0-nightly`), the binary was run
+standalone (`quickwit run`), an `events` index was created from this
+harness's own `quickwit/index_config.yaml`, and every endpoint in §3
+was curled directly — no shim, no StarRocks. This is strictly better
+evidence than the source read it replaces: it catches bugs a source
+read can't, as Gap 6 below shows.
 
 | Gap | Status | Evidence |
 | --- | --- | --- |
-| 1 — ES routes only under `/api/v1/_elastic/` | **Still open** | `rest.rs:495-500` still mounts `elastic_api_handlers(...)` only under `warp::path!("api" / "v1" / ..)`; no root-level mount exists. |
-| 2 — `_search_shards` omits `state`/`nodes` | **Still open** | `rest_handler.rs:140-149` is byte-for-byte the same response shown in the original gap. |
-| 3 — `_nodes/http` omits `version` | **Still open** | `rest_handler.rs:111-126` still has no `version` key. |
-| 4 — `_cat/indices` rejects `s` | **Not reproducible** | `cat_indices.rs:44-93` explicitly parses `s` and accepts `s=index` / `s=index:asc` (exactly what StarRocks sends). This was added by #6168, which the report's own §3 table already listed as 200 on `edge` — Gap 4's write-up contradicted the report's own table. Treating as resolved; drop from the actionable list. |
-| 5 — `_aliases` parsed as an index pattern | **Not reproducible** | `mod.rs:106` registers `es_compat_aliases_handler()` (literal `_elastic/_aliases` path, `filter.rs:283-285`) ahead of the mapping/search-shards catch-alls, and no earlier filter in the chain matches a bare `_aliases` segment on `GET`. Same self-contradiction as Gap 4 (the §3 table already showed 200 on `edge`). Treating as resolved; drop from the actionable list. |
-| 6 — `DELETE /_search/scroll` not implemented | **Fixed** | `elastic_delete_scroll_filter` (`filter.rs:278-280`) and `es_compat_delete_scroll_handler` (`rest_handler.rs:454-472`) exist, are wired into the router at `mod.rs:93`, and return `{"succeeded": true, "num_freed": 0}`. This contradicts the §3 table (405 on both images) — either the `edge` tag used for the original run lagged the commit that added this, or it was mistested. Either way, current `main` implements it. Drop from the actionable list. |
-| 7 — 0.8.0 GA lacks the handlers above | **Still applicable** | The fixes live in `main`'s unreleased `[0.9.0]` changelog section (`CHANGELOG.md`, PR #6168) — not yet a tagged release. Anyone testing against the published `0.8.0` image still hits every gap in §3. |
+| 1 — ES routes only under `/api/v1/_elastic/` | **Still open** | `GET /` → 301 to `/ui/search`; `GET /_search` → 404. Only `/api/v1/_elastic/...` responds. `rest.rs:495-500` still mounts `elastic_api_handlers(...)` solely under `warp::path!("api" / "v1" / ..)`. |
+| 2 — `_search_shards` omits `state`/`nodes` | **Still open** | Live `GET /api/v1/_elastic/events/_search_shards` → `{"shards":[[{"index":"events","node":"verify-node","primary":true,"shard":0}]]}` — no `state`, no top-level `nodes` map, matching `rest_handler.rs:140-149` exactly. |
+| 3 — `_nodes/http` omits `version` | **Still open** | Live `GET /api/v1/_elastic/_nodes/http` → `{"nodes":{"verify-node":{"http":{"publish_address":"127.0.0.1:17280"},"roles":["data","ingest"]}}}` — no `version` key, matching `rest_handler.rs:111-126`. |
+| 4 — `_cat/indices` rejects `s` | **Fixed, confirmed live** | `GET /api/v1/_elastic/_cat/indices?h=index&format=json&s=index:asc` → 200 with the index list. `cat_indices.rs:44-93` (added by #6168) explicitly accepts `s=index` / `s=index:asc`. Drop from the actionable list. |
+| 5 — `_aliases` parsed as an index pattern | **Fixed, confirmed live** | `GET /api/v1/_elastic/_aliases` → 200 `{}`. `es_compat_aliases_handler()` (`mod.rs:106`, literal path `filter.rs:283-285`) is reached correctly. Drop from the actionable list. |
+| 6 — `DELETE /_search/scroll` not implemented | **Still broken — new finding** | `DELETE /api/v1/_elastic/_search/scroll` → **411 "A content-length header is required"** with no `Content-Length` header, or **405 "HTTP method not allowed"** with one. The handler code (`elastic_delete_scroll_filter` at `filter.rs:278-280`, `es_compat_delete_scroll_handler` at `rest_handler.rs:454-472`, wired at `mod.rs:93`) exists and looks correct on paper — the earlier source-only read of this branch's history wrongly called it fixed. Live testing shows the route is not actually reachable: requests never reach the DELETE-specific filter, only the rejections from the neighboring GET/POST scroll filter (`elastic_scroll_filter`, same path) at `filter.rs:264-270`, which runs a `body::content_length_limit` check ahead of its own method check and apparently "wins" the `.or()` combination against the sibling DELETE filter. Root cause not fully isolated (looks like a `warp` filter-combinator interaction, not an application-logic bug), but the net behavior is unchanged from the original report: `DELETE /_search/scroll` still doesn't return 200. Low severity holds (StarRocks ignores scroll-cleanup failures), but this should stay on the actionable list, now as "fix or remove the dead code," not "add the handler." |
+| 7 — 0.8.0 GA lacks the handlers above | **Still applicable** | The `main`-only fixes (Gaps 4–5, and the still-broken Gap 6 attempt) live under the unreleased `[0.9.0]` section of `CHANGELOG.md` (PR #6168) — not yet a tagged release. Anyone testing against the published `0.8.0` image still hits every gap in §3. |
 
-**Net effect on the shim:** the path-prefix rewrite (Gap 1) is still
-required, and the `_search_shards`/`_nodes/http` body patches (Gaps 2–3)
-are still required. The `_aliases`/`_cat/indices`/scroll workarounds the
-shim carries are no longer necessary against current `main` and can be
-dropped once the harness is pinned to a `main`-built image or a `0.9.0`
-release.
+**Net effect on the shim:** the path-prefix rewrite (Gap 1), the
+`_search_shards`/`_nodes/http` body patches (Gaps 2–3), and tolerating
+`DELETE /_search/scroll` failures (Gap 6) are all still required
+against current `main`. Only the `_aliases`/`_cat/indices` workarounds
+(Gaps 4–5) are no longer necessary and can be dropped once the harness
+is pinned to a `main`-built image or a `0.9.0` release.
 
-This is a source-level read, not a fresh live run — recommended
-follow-up is to re-run `bash run.sh` against a freshly built `edge` (or
-`0.9.0`) image on a host with unrestricted registry access to confirm
-§2's data-plane results still hold and to empirically close out Gaps
-4–6 rather than relying on static review alone.
+Recommended follow-up: re-run `bash run.sh` against a freshly built
+`edge` (or `0.9.0`) image on a host with unrestricted registry access
+to confirm §2's data-plane results still hold end-to-end with
+StarRocks in the loop, and file the Gap 6 routing bug upstream with a
+minimal `warp`-level reproduction.
 
 ---
 
@@ -111,7 +118,7 @@ Quickwit ships today.
 | `GET /<index>/_search_shards`         | 404 (handler not registered)    | 200, but missing `state` and the `nodes` map | ✅ (shim injects `"state":"STARTED"`, `nodes.<id>.attributes/version`) |
 | `POST /<index>/_search?scroll=…`      | 200                             | 200                              | ✅ |
 | `POST /_search/scroll`                | 200                             | 200                              | ✅ |
-| `DELETE /_search/scroll`              | 405 — `DELETE` not bound        | 405 in the original run; **200 on `main` as of 2026-09-18** (see §0, Gap 6) | ✅ |
+| `DELETE /_search/scroll`              | 405 — `DELETE` not bound        | 405/411 depending on headers, confirmed live against `main` on 2026-09-18 (see §0, Gap 6) | ⚠️ tolerated by StarRocks (it ignores cleanup failures); scrolls just expire on Quickwit's TTL. |
 
 ## 4. Identified gaps in Quickwit (with proposed fixes)
 
@@ -208,9 +215,10 @@ The same `version` string proposed in Gap 2 should be added here.
 As of 2026-09-18, `quickwit/quickwit-serve/src/elasticsearch_api/model/cat_indices.rs:44-93`
 already parses `s` and explicitly accepts `s=index` / `s=index:asc`
 (anything else is rejected as unsupported, which is fine — StarRocks
-never sends anything else). No fix is needed; this entry is kept for
-history. See §0 for why the original write-up called this a gap despite
-the report's own §3 table already showing 200 on `edge`.
+never sends anything else). Confirmed live: `GET /api/v1/_elastic/_cat/indices?h=index&format=json&s=index:asc`
+against a `main`-built binary returns 200. No fix is needed; this entry
+is kept for history. See §0 for why the original write-up called this
+a gap despite the report's own §3 table already showing 200 on `edge`.
 
 ### Gap 5 — `GET /_aliases` is parsed as an index pattern [resolved — see §0]
 
@@ -223,20 +231,31 @@ As of 2026-09-18, `es_compat_aliases_handler` (a literal `_elastic/_aliases`
 match, `filter.rs:283-285`) is registered in
 `quickwit/quickwit-serve/src/elasticsearch_api/mod.rs:106`, ahead of
 `es_compat_index_mapping_handler` (`mod.rs:107-110`), and no earlier
-filter in the chain matches a bare `_aliases` segment on `GET`. No fix
-is needed; kept for history — see §0.
+filter in the chain matches a bare `_aliases` segment on `GET`.
+Confirmed live: `GET /api/v1/_elastic/_aliases` against a `main`-built
+binary returns 200 `{}`. No fix is needed; kept for history — see §0.
 
-### Gap 6 — `DELETE /_search/scroll` not implemented [resolved — see §0]
+### Gap 6 — `DELETE /_search/scroll` not implemented [still open — code exists but is dead; see §0]
 
 > Severity: low. StarRocks calls this to release scroll contexts, but
 > ignores failures. Quickwit currently returns 405. Adding a no-op
 > handler that returns `{"succeeded": true, "num_freed": 0}` would
 > stop logspam in the client.
 
-As of 2026-09-18, `elastic_delete_scroll_filter` (`filter.rs:278-280`)
-and `es_compat_delete_scroll_handler` (`rest_handler.rs:454-472`) exist,
-are registered at `mod.rs:93`, and return exactly the no-op payload
-proposed above. No fix is needed; kept for history — see §0.
+A handler matching this exact description was added on `main`:
+`elastic_delete_scroll_filter` (`filter.rs:278-280`) and
+`es_compat_delete_scroll_handler` (`rest_handler.rs:454-472`) exist,
+are registered at `mod.rs:93`, and would return exactly the no-op
+payload proposed above — *if reached*. Live testing against a
+`main`-built binary (2026-09-18) shows it isn't: `DELETE
+/api/v1/_elastic/_search/scroll` still returns 411 (no `Content-Length`
+header) or 405 (with one), never 200. The neighboring GET/POST filter
+for the same path (`elastic_scroll_filter`, `filter.rs:264-270`) runs a
+`body::content_length_limit` check ahead of its own method check, and
+that appears to "win" the `.or()` combination against the sibling
+DELETE filter regardless of method. This still needs a fix (or, since
+the existing code is effectively dead, removing it and filing the
+routing bug upstream) — see §0.
 
 ### Gap 7 — Quickwit `0.8.0` lacks several ES handlers entirely [still applicable]
 
@@ -276,24 +295,32 @@ allow it.
 
 ## 6. Recommended follow-up
 
-*Updated 2026-09-18 — Gaps 4–6 are resolved on `main` (§0); only Gaps
-1–3 remain actionable.*
+*Updated 2026-09-18, after live-testing a `main`-built binary (§0):
+Gaps 4–5 are genuinely resolved. Gaps 1, 2, 3, and 6 remain actionable
+— Gap 6's fix is now "make the existing dead code reachable," not
+"write it."*
 
 1. Submit a PR that closes Gaps 2 and 3. Each is a localized change in
    `quickwit-serve/src/elasticsearch_api/`.
 2. Land Gap 1 as a separate config-shaped change (root mount of the
    ES-compat router).
-3. Add a StarRocks-flavored scenario to `quickwit/rest-api-tests/scenarii/`
-   that exercises `_search_shards`, `_nodes/http`, `_cat/indices` with
-   StarRocks-specific parameters, so future regressions are caught
-   before release — including regression coverage for the `_aliases`,
-   `s`-sorted `_cat/indices`, and `DELETE /_search/scroll` behavior that
-   Gaps 4–6 originally (and incorrectly) flagged as broken.
-4. Re-run `bash run.sh` against a fresh `main`-built image once registry
-   access is available, to empirically confirm §0's source-level
-   findings and refresh §2's data-plane results.
+3. Fix Gap 6: reorder or restructure the `_elastic/_search/scroll`
+   routing (`mod.rs:92-93`, `filter.rs:264-270` and `:278-280`) so the
+   DELETE-specific filter is actually reachable, or replace the
+   `.or()` chain for that path with a single filter that dispatches on
+   method internally. File it upstream with a minimal `warp`
+   reproduction if the cause turns out to be a `warp` behavior rather
+   than something fixable locally.
+4. Add a StarRocks-flavored scenario to `quickwit/rest-api-tests/scenarii/`
+   that exercises `_search_shards`, `_nodes/http`, `_cat/indices`, and
+   `DELETE /_search/scroll` with StarRocks-specific parameters, so
+   future regressions (and Gap 6's kind of silently-dead route) are
+   caught before release.
+5. Re-run `bash run.sh` against a fresh `main`-built image once registry
+   access is available, to confirm §0's findings end-to-end with
+   StarRocks in the loop and refresh §2's data-plane results.
 
-After (1)+(2), no shim is necessary: a Quickwit binary alone serves
+After (1)+(2)+(3), no shim is necessary: a Quickwit binary alone serves
 StarRocks correctly.
 
 ## 7. How to reproduce
