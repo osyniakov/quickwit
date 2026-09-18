@@ -1,0 +1,4 @@
+artifacts/
+.env
+nginx/*.bak
+docker-compose.yml.bak
