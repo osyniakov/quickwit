@@ -1,0 +1,1 @@
+{"timestamp":"2024-01-15T10:30:00Z","severity":"ERROR","body":"connection refused while dialing upstream","count":42,"ratio":0.75,"ok":false,"host_ip":"192.168.1.42","payload":"aGVsbG8gd29ybGQ=","attributes":{"level":"error","retry":3,"tags":["net","upstream"]},"resource":{"service_name":"gateway"}}
