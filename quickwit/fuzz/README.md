@@ -121,9 +121,13 @@ UserInputLeaf::Exists { field: _ } => UserInputLeaf::Exists {
 guard this from the outside, since the panic happens inside `parse_query`; the fix
 belongs in tantivy.
 
-Targets that came back clean: `elastic_query_dsl` (3.0M executions),
-`otlp_logs_protobuf` (3.1M), `otlp_logs_json` (2.8M), plus `index_config` and
-`ingest_document`.
+Targets that came back clean, at 45 seconds each: `otlp_logs_protobuf` (3.1M
+executions), `elastic_query_dsl` (3.0M), `otlp_logs_json` (2.8M), `ingest_document`
+(1.4M) and `index_config` (193k — the slowest target, since every input is parsed
+three times and a clean parse then builds a doc mapper).
+
+Forty-five seconds is a smoke run, not a campaign. "Clean" above means no shallow
+crash, not no bug; the batch workflow is what actually explores these.
 
 ## Reproducing a crash
 
