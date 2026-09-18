@@ -32,7 +32,25 @@ order doesn't matter).
 
 ## Viewing the diagrams
 
-No local install is required; use `npx`:
+### Locally, with npm
+
+```bash
+cd docs/internals/architecture/likec4
+npm install
+npm start        # live preview with hot reload at http://localhost:5173
+```
+
+Scroll/click through the `index`, `layers`, and per-layer `*Detail` views
+listed below in the sidebar of the page it opens. `npm run validate`
+checks syntax/semantics without a browser, and `npm run build` produces a
+static site in `dist/` you can open without a running server.
+
+Requires Node.js >= 22.22.3 (a slightly older 22.x will run with an
+`EBADENGINE` warning, but works). `node_modules/`, `dist/`, and `png/` in
+this directory are gitignored — they're build output, not part of the
+model.
+
+### One-off, without installing anything
 
 ```bash
 # Live preview with hot reload, from the repo root
@@ -45,10 +63,11 @@ npx likec4@latest validate docs/internals/architecture/likec4
 npx likec4@latest export png docs/internals/architecture/likec4 -o /tmp/quickwit-arch
 ```
 
-The [Chromium/Chrome headless-shell build LikeC4's exporter drives may
-need `npx playwright install chromium`] the first time you export images
-on a machine that doesn't already have it; `validate` never needs a
-browser.
+The Chromium/Chrome-headless-shell build LikeC4's exporter drives may
+need `npx playwright install chromium` the first time you export images
+on a machine that doesn't already have it; `validate` and `start` never
+need a browser on the machine running the server, only in whatever you
+view the page with.
 
 ## Views
 
@@ -72,5 +91,6 @@ When a `Cargo.toml` dependency changes:
    to the other layer's file and update both files' relationships.
 3. Update the matching prose doc in `../` (the crate table and any
    "depends on (internal)" column).
-4. Run `npx likec4@latest validate docs/internals/architecture/likec4`
-   before committing.
+4. Run `npm run validate` (or `npx likec4@latest validate
+   docs/internals/architecture/likec4` from the repo root) before
+   committing.
