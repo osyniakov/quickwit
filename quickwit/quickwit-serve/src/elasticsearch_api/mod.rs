@@ -562,4 +562,42 @@ mod tests {
             .await;
         assert_eq!(resp.status(), 200);
     }
+
+    // Regression test: `es_compat_scroll_handler` combines the GET/POST and
+    // DELETE filters for `_elastic/_search/scroll` into one filter before
+    // recovering rejections. If they were instead two separately-recovered
+    // handlers `.or()`-ed together (as they used to be), the GET/POST
+    // branch's rejection on a DELETE request (missing Content-Length, or
+    // wrong method) would get recovered into a reply on its own, and the
+    // DELETE branch would never run -- this test would see 411/405 instead
+    // of 200.
+    #[tokio::test]
+    async fn test_delete_scroll_returns_200() {
+        let search_service = Arc::new(MockSearchService::new());
+        let handler = super::es_compat_scroll_handler(search_service);
+        let resp = warp::test::request()
+            .path("/_elastic/_search/scroll")
+            .method("DELETE")
+            .reply(&handler)
+            .await;
+        assert_eq!(resp.status(), 200);
+        let resp_json: JsonValue = serde_json::from_slice(resp.body()).unwrap();
+        assert_eq!(
+            resp_json,
+            serde_json::json!({"succeeded": true, "num_freed": 0})
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_scroll_without_scroll_id_returns_400() {
+        let search_service = Arc::new(MockSearchService::new());
+        let handler = super::es_compat_scroll_handler(search_service);
+        let resp = warp::test::request()
+            .path("/_elastic/_search/scroll")
+            .method("POST")
+            .body("{}")
+            .reply(&handler)
+            .await;
+        assert_eq!(resp.status(), 400);
+    }
 }
