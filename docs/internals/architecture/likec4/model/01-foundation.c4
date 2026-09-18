@@ -1,0 +1,37 @@
+model {
+  extend quickwit {
+    layer foundation 'Foundation & Shared Kernel' {
+      description 'Crates with no, or almost no, internal dependencies. Every other layer sits on top of these.'
+
+      crate common 'quickwit-common' {
+        description 'Shared utilities: metrics helpers, rate-limited logging, env var reading, run_cpu_intensive, etc. Near-universal fan-in.'
+      }
+      crate metrics 'quickwit-metrics' {
+        description 'Zero-allocation metric declaration macros (counter!/gauge!/histogram!) on top of the `metrics` crate. The true base of the DAG.'
+      }
+      crate macros 'quickwit-macros' {
+        description 'Workspace proc-macro definitions.'
+      }
+      crate codegen 'quickwit-codegen' {
+        description 'Generates service traits, adapters, and gRPC clients/servers from .proto files at build time.'
+      }
+      crate datetime 'quickwit-datetime' {
+        description 'Date/time parsing utilities shared by config, query, and doc-mapper.'
+      }
+      crate aws 'quickwit-aws' {
+        description 'Shared, Rustls-based AWS HTTP client construction reused by every AWS SDK client in the workspace.'
+      }
+      crate dst 'quickwit-dst' {
+        description 'Deterministic simulation testing harness and shared invariants (TLA+/stateright model-checking). Consumed by quickwit-indexing and quickwit-parquet-engine, not just tests.'
+      }
+      crate metricsInventory 'quickwit-metrics-inventory' {
+        #tool
+        description 'Dev-tool binary that enumerates every registered MetricInfo via the `inventory` crate.'
+      }
+    }
+  }
+
+  quickwit.foundation.common -> quickwit.foundation.metrics 'depends on'
+  quickwit.foundation.aws -> quickwit.foundation.common 'depends on'
+  quickwit.foundation.metricsInventory -> quickwit.foundation.metrics 'depends on'
+}

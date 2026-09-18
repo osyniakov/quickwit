@@ -1,0 +1,33 @@
+specification {
+  // A human or external caller of the system.
+  element person
+
+  // Something outside the Quickwit codebase that Quickwit talks to.
+  element externalSystem
+
+  // The Quickwit codebase as a whole (C4 "software system").
+  element system
+
+  // One of the architectural layers defined in ../08-dependency-rules.md.
+  // Layers only contain crates/frontends; they never depend "upward".
+  element layer
+
+  // A crate in the quickwit/ Cargo workspace.
+  element crate
+
+  // A non-Rust front-end shipped alongside the workspace (quickwit-ui).
+  element frontend
+
+  // A crate that produces one or more binaries (`[[bin]]` / main.rs).
+  tag entrypoint
+
+  // Opt-in / not part of `default-members`; still under active development.
+  tag experimental
+
+  // Exists only to exercise the rest of the system in tests; never a
+  // runtime dependency of a production crate.
+  tag testOnly
+
+  // A small dev/ops utility binary, not part of the request-serving path.
+  tag tool
+}

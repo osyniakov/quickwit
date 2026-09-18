@@ -1,0 +1,94 @@
+views {
+  view index {
+    title 'Quickwit - System Landscape'
+    description 'Quickwit and the external systems it talks to. See the "layers" view for what is inside Quickwit.'
+    include *
+  }
+
+  view layers of quickwit {
+    title 'Quickwit - Layered Architecture'
+    description 'The 8 layers of the quickwit/ Cargo workspace. An edge between two layers means at least one crate in the source layer depends on at least one crate in the target layer. See docs/internals/architecture/08-dependency-rules.md for the full crate-level adjacency list.'
+    include quickwit.*
+    include operator
+    include objectStorage
+    include rdbms
+    include messageQueues
+    include otelClients
+    include awsLambda
+  }
+
+  view foundationDetail of quickwit.foundation {
+    title 'Foundation & Shared Kernel'
+    include quickwit.foundation.*
+  }
+
+  view protocolDetail of quickwit.protocol {
+    title 'Protocol & Actor Core'
+    include quickwit.protocol.*
+    include quickwit.foundation
+  }
+
+  view domainDetail of quickwit.domain {
+    title 'Domain Primitives'
+    include quickwit.domain.*
+    include quickwit.protocol
+    include quickwit.foundation
+    include quickwit.storage
+  }
+
+  view storageDetail of quickwit.storage {
+    title 'Storage & Metadata'
+    include quickwit.storage.*
+    include quickwit.domain
+    include quickwit.protocol
+    include quickwit.foundation
+    include objectStorage
+    include rdbms
+  }
+
+  view dataplaneDetail of quickwit.dataplane {
+    title 'Data-Plane Engines'
+    include quickwit.dataplane.*
+    include quickwit.storage
+    include quickwit.domain
+    include quickwit.protocol
+    include quickwit.foundation
+    include messageQueues
+    include otelClients
+  }
+
+  view platformDetail of quickwit.platform {
+    title 'Platform Services'
+    include quickwit.platform.*
+    include quickwit.dataplane
+    include quickwit.storage
+    include quickwit.domain
+    include quickwit.protocol
+    include quickwit.foundation
+    include awsLambda
+  }
+
+  view entrypointsDetail of quickwit.entrypoints {
+    title 'API Surface & Entry Points'
+    include quickwit.entrypoints.*
+    include quickwit.platform
+    include quickwit.dataplane
+    include quickwit.storage
+    include quickwit.domain
+    include quickwit.protocol
+    include quickwit.foundation
+    include operator
+  }
+
+  view testingDetail of quickwit.testing {
+    title 'Cross-Cutting Test Infrastructure'
+    include quickwit.testing.*
+    include quickwit.entrypoints
+    include quickwit.platform
+    include quickwit.dataplane
+    include quickwit.storage
+    include quickwit.domain
+    include quickwit.protocol
+    include quickwit.foundation
+  }
+}

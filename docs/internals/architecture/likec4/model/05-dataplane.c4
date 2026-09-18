@@ -1,0 +1,81 @@
+model {
+  extend quickwit {
+    layer dataplane 'Data-Plane Engines' {
+      description 'The engines that move and transform documents: ingestion, indexing, and distributed search.'
+
+      crate ingest 'quickwit-ingest' {
+        description 'Native, WAL-based distributed and replicated ingestion engine.'
+      }
+      crate opentelemetry 'quickwit-opentelemetry' {
+        description 'OTLP ingestion server and OTLP<->document conversion, sitting between ingest and indexing (indexing depends on it for trace/log document conversion, not the other way around).'
+      }
+      crate indexing 'quickwit-indexing' {
+        description 'Actor-based indexing pipeline (Source -> DocProcessor -> Indexer -> IndexSerializer -> Packager -> Uploader -> Sequencer -> Publisher) plus the parallel merge pipeline.'
+      }
+      crate search 'quickwit-search' {
+        description 'Distributed search orchestration: root servers parse/coordinate, leaf servers search assigned splits, root merges leaf results.'
+      }
+      crate compaction 'quickwit-compaction' {
+        description 'Compactor service that merges and rewrites splits.'
+      }
+    }
+  }
+
+  quickwit.dataplane.ingest -> quickwit.protocol.actors 'depends on'
+  quickwit.dataplane.ingest -> quickwit.storage.cluster 'depends on'
+  quickwit.dataplane.ingest -> quickwit.foundation.codegen 'depends on'
+  quickwit.dataplane.ingest -> quickwit.foundation.common 'depends on'
+  quickwit.dataplane.ingest -> quickwit.domain.config 'depends on'
+  quickwit.dataplane.ingest -> quickwit.domain.docMapper 'depends on'
+  quickwit.dataplane.ingest -> quickwit.foundation.metrics 'depends on'
+  quickwit.dataplane.ingest -> quickwit.protocol.proto 'depends on'
+  quickwit.dataplane.ingest -> messageQueues 'consumes records from'
+
+  quickwit.dataplane.opentelemetry -> quickwit.foundation.common 'depends on'
+  quickwit.dataplane.opentelemetry -> quickwit.domain.config 'depends on'
+  quickwit.dataplane.opentelemetry -> quickwit.dataplane.ingest 'depends on'
+  quickwit.dataplane.opentelemetry -> quickwit.storage.metastore 'depends on'
+  quickwit.dataplane.opentelemetry -> quickwit.foundation.metrics 'depends on'
+  quickwit.dataplane.opentelemetry -> quickwit.domain.parquetEngine 'depends on'
+  quickwit.dataplane.opentelemetry -> quickwit.protocol.proto 'depends on'
+  otelClients -> quickwit.dataplane.opentelemetry 'exports OTLP traces/logs/metrics to'
+
+  quickwit.dataplane.indexing -> quickwit.protocol.actors 'depends on'
+  quickwit.dataplane.indexing -> quickwit.foundation.aws 'depends on'
+  quickwit.dataplane.indexing -> quickwit.storage.cluster 'depends on'
+  quickwit.dataplane.indexing -> quickwit.foundation.common 'depends on'
+  quickwit.dataplane.indexing -> quickwit.domain.config 'depends on'
+  quickwit.dataplane.indexing -> quickwit.domain.directories 'depends on'
+  quickwit.dataplane.indexing -> quickwit.domain.docMapper 'depends on'
+  quickwit.dataplane.indexing -> quickwit.foundation.dst 'depends on'
+  quickwit.dataplane.indexing -> quickwit.dataplane.ingest 'depends on'
+  quickwit.dataplane.indexing -> quickwit.storage.metastore 'depends on'
+  quickwit.dataplane.indexing -> quickwit.foundation.metrics 'depends on'
+  quickwit.dataplane.indexing -> quickwit.dataplane.opentelemetry 'depends on'
+  quickwit.dataplane.indexing -> quickwit.domain.parquetEngine 'depends on'
+  quickwit.dataplane.indexing -> quickwit.protocol.proto 'depends on'
+  quickwit.dataplane.indexing -> quickwit.domain.query 'depends on'
+  quickwit.dataplane.indexing -> quickwit.storage.storage 'depends on'
+
+  quickwit.dataplane.search -> quickwit.foundation.common 'depends on'
+  quickwit.dataplane.search -> quickwit.domain.config 'depends on'
+  quickwit.dataplane.search -> quickwit.domain.directories 'depends on'
+  quickwit.dataplane.search -> quickwit.domain.docMapper 'depends on'
+  quickwit.dataplane.search -> quickwit.dataplane.indexing 'depends on'
+  quickwit.dataplane.search -> quickwit.storage.metastore 'depends on'
+  quickwit.dataplane.search -> quickwit.foundation.metrics 'depends on'
+  quickwit.dataplane.search -> quickwit.protocol.proto 'depends on'
+  quickwit.dataplane.search -> quickwit.domain.query 'depends on'
+  quickwit.dataplane.search -> quickwit.storage.storage 'depends on'
+
+  quickwit.dataplane.compaction -> quickwit.protocol.actors 'depends on'
+  quickwit.dataplane.compaction -> quickwit.storage.cluster 'depends on'
+  quickwit.dataplane.compaction -> quickwit.foundation.common 'depends on'
+  quickwit.dataplane.compaction -> quickwit.domain.config 'depends on'
+  quickwit.dataplane.compaction -> quickwit.domain.docMapper 'depends on'
+  quickwit.dataplane.compaction -> quickwit.dataplane.indexing 'depends on'
+  quickwit.dataplane.compaction -> quickwit.storage.metastore 'depends on'
+  quickwit.dataplane.compaction -> quickwit.foundation.metrics 'depends on'
+  quickwit.dataplane.compaction -> quickwit.protocol.proto 'depends on'
+  quickwit.dataplane.compaction -> quickwit.storage.storage 'depends on'
+}

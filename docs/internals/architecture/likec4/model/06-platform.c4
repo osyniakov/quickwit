@@ -1,0 +1,114 @@
+model {
+  extend quickwit {
+    layer platform 'Platform Services' {
+      description 'Cluster-wide services built on top of the data-plane engines: scheduling, lifecycle, maintenance, and specialized backends.'
+
+      crate controlPlane 'quickwit-control-plane' {
+        description 'Schedules indexing tasks to indexers and tracks the pool of available indexer nodes.'
+      }
+      crate indexManagement 'quickwit-index-management' {
+        description 'Creates and manages indexes, sources, and templates.'
+      }
+      crate janitor 'quickwit-janitor' {
+        description 'Maintenance service: garbage collection, delete-query tasks, and retention policies.'
+      }
+      crate jaeger 'quickwit-jaeger' {
+        description 'Jaeger-compatible trace storage and query backend.'
+      }
+      crate lambdaServer 'quickwit-lambda-server' {
+        #entrypoint
+        description 'AWS Lambda handler executing leaf-search requests.'
+      }
+      crate lambdaClient 'quickwit-lambda-client' {
+        description 'Invokes and auto-deploys the leaf-search Lambda function.'
+      }
+      crate datafusion 'quickwit-datafusion' {
+        #experimental
+        description 'Quickwit-specific DataFusion glue: metrics data source, object-store adapter, and searcher-pool worker resolver.'
+      }
+      crate dfCore 'quickwit-df-core' {
+        #experimental
+        description 'Generic DataFusion runtime framework (session, query service, distributed worker, Substrait) with no Quickwit domain coupling.'
+      }
+      crate telemetryExporters 'quickwit-telemetry-exporters' {
+        description 'Exports Quickwit usage/analytics telemetry.'
+      }
+    }
+  }
+
+  quickwit.platform.controlPlane -> quickwit.protocol.actors 'depends on'
+  quickwit.platform.controlPlane -> quickwit.storage.cluster 'depends on'
+  quickwit.platform.controlPlane -> quickwit.foundation.common 'depends on'
+  quickwit.platform.controlPlane -> quickwit.domain.config 'depends on'
+  quickwit.platform.controlPlane -> quickwit.dataplane.indexing 'depends on'
+  quickwit.platform.controlPlane -> quickwit.dataplane.ingest 'depends on'
+  quickwit.platform.controlPlane -> quickwit.storage.metastore 'depends on'
+  quickwit.platform.controlPlane -> quickwit.foundation.metrics 'depends on'
+  quickwit.platform.controlPlane -> quickwit.protocol.proto 'depends on'
+
+  quickwit.platform.indexManagement -> quickwit.foundation.common 'depends on'
+  quickwit.platform.indexManagement -> quickwit.domain.config 'depends on'
+  quickwit.platform.indexManagement -> quickwit.dataplane.indexing 'depends on'
+  quickwit.platform.indexManagement -> quickwit.storage.metastore 'depends on'
+  quickwit.platform.indexManagement -> quickwit.foundation.metrics 'depends on'
+  quickwit.platform.indexManagement -> quickwit.domain.parquetEngine 'depends on'
+  quickwit.platform.indexManagement -> quickwit.protocol.proto 'depends on'
+  quickwit.platform.indexManagement -> quickwit.storage.storage 'depends on'
+
+  quickwit.platform.janitor -> quickwit.protocol.actors 'depends on'
+  quickwit.platform.janitor -> quickwit.foundation.common 'depends on'
+  quickwit.platform.janitor -> quickwit.dataplane.compaction 'depends on'
+  quickwit.platform.janitor -> quickwit.domain.config 'depends on'
+  quickwit.platform.janitor -> quickwit.domain.docMapper 'depends on'
+  quickwit.platform.janitor -> quickwit.platform.indexManagement 'depends on'
+  quickwit.platform.janitor -> quickwit.dataplane.indexing 'depends on'
+  quickwit.platform.janitor -> quickwit.storage.metastore 'depends on'
+  quickwit.platform.janitor -> quickwit.foundation.metrics 'depends on'
+  quickwit.platform.janitor -> quickwit.domain.parquetEngine 'depends on'
+  quickwit.platform.janitor -> quickwit.protocol.proto 'depends on'
+  quickwit.platform.janitor -> quickwit.domain.query 'depends on'
+  quickwit.platform.janitor -> quickwit.dataplane.search 'depends on'
+  quickwit.platform.janitor -> quickwit.storage.storage 'depends on'
+
+  quickwit.platform.jaeger -> quickwit.protocol.actors 'depends on'
+  quickwit.platform.jaeger -> quickwit.storage.cluster 'depends on'
+  quickwit.platform.jaeger -> quickwit.foundation.common 'depends on'
+  quickwit.platform.jaeger -> quickwit.domain.config 'depends on'
+  quickwit.platform.jaeger -> quickwit.dataplane.indexing 'depends on'
+  quickwit.platform.jaeger -> quickwit.dataplane.ingest 'depends on'
+  quickwit.platform.jaeger -> quickwit.storage.metastore 'depends on'
+  quickwit.platform.jaeger -> quickwit.foundation.metrics 'depends on'
+  quickwit.platform.jaeger -> quickwit.dataplane.opentelemetry 'depends on'
+  quickwit.platform.jaeger -> quickwit.protocol.proto 'depends on'
+  quickwit.platform.jaeger -> quickwit.domain.query 'depends on'
+  quickwit.platform.jaeger -> quickwit.dataplane.search 'depends on'
+  quickwit.platform.jaeger -> quickwit.storage.storage 'depends on'
+
+  quickwit.platform.lambdaServer -> quickwit.foundation.common 'depends on'
+  quickwit.platform.lambdaServer -> quickwit.domain.config 'depends on'
+  quickwit.platform.lambdaServer -> quickwit.domain.docMapper 'depends on'
+  quickwit.platform.lambdaServer -> quickwit.protocol.proto 'depends on'
+  quickwit.platform.lambdaServer -> quickwit.dataplane.search 'depends on'
+  quickwit.platform.lambdaServer -> quickwit.storage.storage 'depends on'
+
+  quickwit.platform.lambdaClient -> quickwit.foundation.common 'depends on'
+  quickwit.platform.lambdaClient -> quickwit.domain.config 'depends on'
+  quickwit.platform.lambdaClient -> quickwit.platform.lambdaServer 'depends on'
+  quickwit.platform.lambdaClient -> quickwit.foundation.metrics 'depends on'
+  quickwit.platform.lambdaClient -> quickwit.protocol.proto 'depends on'
+  quickwit.platform.lambdaClient -> quickwit.dataplane.search 'depends on'
+  quickwit.platform.lambdaClient -> quickwit.storage.storage 'depends on'
+  quickwit.platform.lambdaClient -> awsLambda 'invokes leaf-search functions on'
+
+  quickwit.platform.datafusion -> quickwit.foundation.common 'depends on'
+  quickwit.platform.datafusion -> quickwit.domain.config 'depends on'
+  quickwit.platform.datafusion -> quickwit.platform.dfCore 'depends on'
+  quickwit.platform.datafusion -> quickwit.storage.metastore 'depends on'
+  quickwit.platform.datafusion -> quickwit.domain.parquetEngine 'depends on'
+  quickwit.platform.datafusion -> quickwit.protocol.proto 'depends on'
+  quickwit.platform.datafusion -> quickwit.dataplane.search 'depends on'
+  quickwit.platform.datafusion -> quickwit.storage.storage 'depends on'
+
+  quickwit.platform.telemetryExporters -> quickwit.foundation.common 'depends on'
+  quickwit.platform.telemetryExporters -> quickwit.foundation.metrics 'depends on'
+}

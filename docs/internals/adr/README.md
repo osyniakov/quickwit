@@ -6,6 +6,10 @@ This directory serves as the **central knowledge base** for Quickwit architectur
 
 For AI agents and developers, here is how the system is organized by domain:
 
+For the crate-level layered architecture (which crate belongs to which
+layer, what it may depend on, and LikeC4 diagrams of the graph), see
+[`../architecture/`](../architecture/README.md).
+
 ### Core Architecture
 
 ADRs will be created here as we implement new systems. Start with the metrics pipeline and work outward.

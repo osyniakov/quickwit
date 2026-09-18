@@ -1,0 +1,17 @@
+{
+  "name": "quickwit-architecture-diagrams",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "description": "LikeC4 diagrams for the quickwit/ Cargo workspace's layered architecture (see ../README.md).",
+  "scripts": {
+    "start": "likec4 start .",
+    "dev": "likec4 start .",
+    "validate": "likec4 validate .",
+    "build": "likec4 build . -o dist",
+    "export:png": "likec4 export png . -o png"
+  },
+  "devDependencies": {
+    "likec4": "^1.59.3"
+  }
+}
