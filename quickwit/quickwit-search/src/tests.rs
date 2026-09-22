@@ -22,8 +22,8 @@ use quickwit_doc_mapper::DocMapper;
 use quickwit_doc_mapper::tag_pruning::extract_tags_from_query;
 use quickwit_indexing::TestSandbox;
 use quickwit_proto::search::{
-    LeafListTermsResponse, ListTermsRequest, SearchRequest, SortByValue, SortField, SortOrder,
-    SortValue, TraceId,
+    LeafListTermsResponse, ListTermsRequest, SearchRequest, SortByValue, SortField, SortMissing,
+    SortOrder, SortValue, TraceId,
 };
 use quickwit_query::query_ast::{
     BoolQuery, HitSet, PredicateCache, QueryAst, RangeQuery, qast_helper, qast_json_helper,
@@ -364,6 +364,7 @@ async fn test_single_node_filtering() -> anyhow::Result<()> {
             field_name: "ts".to_string(),
             sort_order: SortOrder::Desc as i32,
             sort_datetime_format: None,
+            missing: SortMissing::Last as i32,
         }],
         ..Default::default()
     };
@@ -388,6 +389,7 @@ async fn test_single_node_filtering() -> anyhow::Result<()> {
             field_name: "ts".to_string(),
             sort_order: SortOrder::Desc as i32,
             sort_datetime_format: None,
+            missing: SortMissing::Last as i32,
         }],
         ..Default::default()
     };
@@ -411,6 +413,7 @@ async fn test_single_node_filtering() -> anyhow::Result<()> {
             field_name: "ts".to_string(),
             sort_order: SortOrder::Desc as i32,
             sort_datetime_format: None,
+            missing: SortMissing::Last as i32,
         }],
         ..Default::default()
     };
@@ -556,6 +559,7 @@ async fn single_node_search_sort_by_field(
             field_name: sort_by_field.to_string(),
             sort_order: SortOrder::Desc as i32,
             sort_datetime_format: None,
+            missing: SortMissing::Last as i32,
         }],
         ..Default::default()
     };
@@ -644,6 +648,7 @@ async fn test_sort_bm25() {
                 field_name: "_score".to_string(),
                 sort_order: SortOrder::Desc as i32,
                 sort_datetime_format: None,
+                missing: SortMissing::Last as i32,
             }],
             ..Default::default()
         };
@@ -737,6 +742,7 @@ async fn test_sort_by_static_and_dynamic_field() {
                 field_name: sort_field.to_string(),
                 sort_order: order as i32,
                 sort_datetime_format: None,
+                missing: SortMissing::Last as i32,
             }],
             ..Default::default()
         };
@@ -836,11 +842,13 @@ async fn test_sort_by_2_field() {
                         field_name: sort_field1.to_string(),
                         sort_order: order1 as i32,
                         sort_datetime_format: None,
+                        missing: SortMissing::Last as i32,
                     },
                     SortField {
                         field_name: sort_field2.to_string(),
                         sort_order: order2 as i32,
                         sort_datetime_format: None,
+                        missing: SortMissing::Last as i32,
                     },
                 ],
                 ..Default::default()
@@ -920,6 +928,7 @@ async fn test_single_node_invalid_sorting_with_query() {
             field_name: "description".to_string(),
             sort_order: SortOrder::Desc as i32,
             sort_datetime_format: None,
+            missing: SortMissing::Last as i32,
         }],
         ..Default::default()
     };

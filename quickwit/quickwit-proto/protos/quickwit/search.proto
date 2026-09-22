@@ -302,6 +302,17 @@ message SortField {
   // If none, the default output format for datetime field is
   // unix_timestamp_nanos.
   optional SortDatetimeFormat sort_datetime_format = 3;
+  // Position of the documents that have no value for the sort field.
+  SortMissing missing = 4;
+}
+
+enum SortMissing {
+  // Documents without a value are ranked after all the other documents,
+  // regardless of the sort order. This is the default.
+  SORT_MISSING_LAST = 0;
+  // Documents without a value are ranked before all the other documents,
+  // regardless of the sort order.
+  SORT_MISSING_FIRST = 1;
 }
 
 enum SortOrder {

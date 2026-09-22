@@ -163,6 +163,19 @@ By default, the sort order is `ascending` for fast fields and descending for `_s
 
 When sorting by a fast field and this field contains several values in a single document, only the first value is used for sorting.
 
+Documents without a value for the sort field are ranked last, regardless of the sort order. You can rank them first
+with the `missing` option. Only `_first` and `_last` (the default) are supported; custom missing values are rejected.
+
+```json
+{
+  // ...
+  "sort" : [
+    { "rank" : {"order" : "desc", "missing" : "_first"}}
+  ]
+  // ...
+}
+```
+
 The sort order can be set as descending/ascending using the
 following syntax.
 

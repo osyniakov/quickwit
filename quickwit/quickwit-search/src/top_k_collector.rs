@@ -17,7 +17,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 
 use quickwit_common::binary_heap::TopK;
-use quickwit_proto::search::{PartialHit, SortOrder};
+use quickwit_proto::search::{PartialHit, SortMissing, SortOrder};
 use quickwit_proto::types::SplitId;
 use tantivy::{DocId, Score};
 
@@ -193,22 +193,27 @@ pub fn specialized_top_k_segment_collector(
     leaf_max_hits: usize,
     segment_ord: u32,
     search_after_option: Option<PartialHit>,
-    order1: SortOrder,
-    order2: SortOrder,
+    sort_key_mapper: HitSortingMapper,
 ) -> Box<dyn QuickwitSegmentTopKCollector> {
     // TODO: Add support for search_after to the specialized collector.
     // Eventually we may want to remove the generic collector to reduce complexity.
-    if search_after_option.is_some() || score_extractor.is_score() {
+    //
+    // The specialized collectors rely on `Option`'s ordering, which ranks missing values
+    // last. Missing values ranked first are only supported by the generic collector.
+    if search_after_option.is_some()
+        || score_extractor.is_score()
+        || sort_key_mapper.has_missing_first()
+    {
         return Box::new(GenericQuickwitSegmentTopKCollector::new(
             split_id,
             score_extractor,
             leaf_max_hits,
             segment_ord,
             search_after_option,
-            order1,
-            order2,
+            sort_key_mapper,
         ));
     }
+    let HitSortingMapper { order1, order2, .. } = sort_key_mapper;
 
     let sort_first_by_ff = score_extractor.first.is_fast_field();
     let sort_second_by_ff = score_extractor
@@ -628,10 +633,9 @@ impl GenericQuickwitSegmentTopKCollector {
         leaf_max_hits: usize,
         segment_ord: u32,
         search_after_option: Option<PartialHit>,
-        order1: SortOrder,
-        order2: SortOrder,
+        sort_key_mapper: HitSortingMapper,
     ) -> Self {
-        let sort_key_mapper = HitSortingMapper { order1, order2 };
+        let order1 = sort_key_mapper.order1;
         let precomp_search_after_order = match &search_after_option {
             Some(search_after) if !search_after.split_id.is_empty() => order1
                 .compare(split_id.as_str(), search_after.split_id.as_str())
@@ -640,7 +644,7 @@ impl GenericQuickwitSegmentTopKCollector {
             _ => Ordering::Equal,
         };
         let search_after =
-            SearchAfterSegment::new(search_after_option, order1, order2, &score_extractor);
+            SearchAfterSegment::new(search_after_option, &sort_key_mapper, &score_extractor);
 
         GenericQuickwitSegmentTopKCollector {
             split_id,
@@ -671,31 +675,34 @@ impl GenericQuickwitSegmentTopKCollector {
         precomp_search_after_order: Ordering,
         top_k_hits: &mut TopK<SegmentPartialHit, SegmentPartialHitSortingKey, HitSortingMapper>,
     ) {
-        if let Some(search_after) = &search_after {
-            let search_after_value1 = search_after.sort_value;
-            let search_after_value2 = search_after.sort_value2;
-            let orders = &top_k_hits.sort_key_mapper;
-            let mut cmp_result = orders
-                .order1
-                .compare_opt(&sort_value, &search_after_value1)
-                .then_with(|| {
-                    orders
-                        .order2
-                        .compare_opt(&sort_value2, &search_after_value2)
-                });
-            if search_after.compare_on_equal {
-                // TODO actually it's not first, it should be what's in _shard_doc then first then
-                // default
-                let order = orders.order1;
-                cmp_result = cmp_result
-                    .then(precomp_search_after_order)
-                    // We compare doc_id only if sort_value1, sort_value2, split_id and segment_ord
-                    // are equal.
-                    .then_with(|| order.compare(&doc_id, &search_after.doc_id))
+        match search_after {
+            None => {}
+            Some(SearchAfterSegment::SkipMissingFirstValue) => {
+                if sort_value.is_none() {
+                    return;
+                }
             }
+            Some(SearchAfterSegment::Cursor(search_after)) => {
+                let search_after_value1 = search_after.sort_value;
+                let search_after_value2 = search_after.sort_value2;
+                let orders = &top_k_hits.sort_key_mapper;
+                let mut cmp_result = orders
+                    .compare1(&sort_value, &search_after_value1)
+                    .then_with(|| orders.compare2(&sort_value2, &search_after_value2));
+                if search_after.compare_on_equal {
+                    // TODO actually it's not first, it should be what's in _shard_doc then first
+                    // then default
+                    let order = orders.order1;
+                    cmp_result = cmp_result
+                        .then(precomp_search_after_order)
+                        // We compare doc_id only if sort_value1, sort_value2, split_id and
+                        // segment_ord are equal.
+                        .then_with(|| order.compare(&doc_id, &search_after.doc_id))
+                }
 
-            if cmp_result != Ordering::Less {
-                return;
+                if cmp_result != Ordering::Less {
+                    return;
+                }
             }
         }
 
@@ -818,17 +825,27 @@ impl QuickwitSegmentTopKCollector for GenericQuickwitSegmentTopKCollector {
 }
 
 /// Search After, but the sort values are converted to the u64 fast field representation.
-pub(crate) struct SearchAfterSegment {
+pub(crate) enum SearchAfterSegment {
+    /// Every document with a first sort value ranks after the `search_after` hit, and every
+    /// document without one ranks before it (missing values are ranked first). Only the
+    /// documents with a first sort value must be collected.
+    SkipMissingFirstValue,
+    /// Only the documents ranking after this cursor must be collected.
+    Cursor(SearchAfterCursor),
+}
+
+pub(crate) struct SearchAfterCursor {
     sort_value: Option<u64>,
     sort_value2: Option<u64>,
     compare_on_equal: bool,
     doc_id: DocId,
 }
+
 impl SearchAfterSegment {
+    /// Returns `None` if every document of the segment ranks after the `search_after` hit.
     pub fn new(
         search_after_opt: Option<PartialHit>,
-        sort_order1: SortOrder,
-        sort_order2: SortOrder,
+        sort_key_mapper: &HitSortingMapper,
         score_extractor: &SortingFieldExtractorPair,
     ) -> Option<Self> {
         let search_after = search_after_opt?;
@@ -839,13 +856,17 @@ impl SearchAfterSegment {
         {
             if let Some(new_value) = score_extractor
                 .first
-                .convert_to_u64_ff_val(search_after_sort_value, sort_order1)
+                .convert_to_u64_ff_val(search_after_sort_value, sort_key_mapper.order1)
             {
                 sort_value = Some(new_value);
             } else {
-                // Value is out of bounds, we ignore sort_value2 and disable the whole
-                // search_after
-                return None;
+                // Value is out of bounds: all the values of the segment rank after the
+                // search_after value, we ignore sort_value2. Documents without a value rank
+                // after them too, unless missing values are ranked first.
+                return match sort_key_mapper.missing1 {
+                    SortMissing::Last => None,
+                    SortMissing::First => Some(Self::SkipMissingFirstValue),
+                };
             }
         }
         let mut sort_value2 = None;
@@ -858,16 +879,16 @@ impl SearchAfterSegment {
                 .as_ref()
                 .expect("Internal error: Got sort_value2, but no sort extractor");
             if let Some(new_value) =
-                extractor.convert_to_u64_ff_val(search_after_sort_value, sort_order2)
+                extractor.convert_to_u64_ff_val(search_after_sort_value, sort_key_mapper.order2)
             {
                 sort_value2 = Some(new_value);
             }
         }
-        Some(Self {
+        Some(Self::Cursor(SearchAfterCursor {
             sort_value,
             sort_value2,
             compare_on_equal: !search_after.split_id.is_empty(),
             doc_id: search_after.doc_id,
-        })
+        }))
     }
 }

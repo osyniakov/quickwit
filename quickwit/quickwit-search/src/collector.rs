@@ -20,8 +20,8 @@ use itertools::Itertools;
 use quickwit_common::binary_heap::{SortKeyMapper, TopK};
 use quickwit_doc_mapper::{FastFieldWarmupInfo, WarmupInfo};
 use quickwit_proto::search::{
-    LeafResourceStats, LeafSearchResponse, PartialHit, SearchRequest, SortByValue, SortOrder,
-    SortValue, SplitSearchError,
+    LeafResourceStats, LeafSearchResponse, PartialHit, SearchRequest, SortByValue, SortField,
+    SortMissing, SortOrder, SortValue, SplitSearchError,
 };
 use quickwit_proto::types::SplitId;
 use serde::Deserialize;
@@ -46,6 +46,7 @@ pub(crate) enum SortByComponent {
     FastField {
         field_name: String,
         order: SortOrder,
+        missing: SortMissing,
     },
     Score {
         order: SortOrder,
@@ -65,14 +66,18 @@ pub(crate) struct SortByPair {
     second: Option<SortByComponent>,
 }
 impl SortByPair {
-    pub fn sort_orders(&self) -> (SortOrder, SortOrder) {
-        (
-            self.first.sort_order(),
-            self.second
-                .as_ref()
-                .map(|sort_by| sort_by.sort_order())
-                .unwrap_or(SortOrder::Desc),
-        )
+    pub fn sort_key_mapper(&self) -> HitSortingMapper {
+        let (order2, missing2) = self
+            .second
+            .as_ref()
+            .map(|sort_by| (sort_by.sort_order(), sort_by.sort_missing()))
+            .unwrap_or((SortOrder::Desc, SortMissing::Last));
+        HitSortingMapper {
+            order1: self.first.sort_order(),
+            order2,
+            missing1: self.first.sort_missing(),
+            missing2,
+        }
     }
 }
 impl SortByComponent {
@@ -108,11 +113,7 @@ impl SortByComponent {
         }
     }
     pub fn add_fast_field(&self, set: &mut HashSet<String>) {
-        if let SortByComponent::FastField {
-            field_name,
-            order: _,
-        } = self
-        {
+        if let SortByComponent::FastField { field_name, .. } = self {
             set.insert(field_name.clone());
         }
     }
@@ -121,6 +122,13 @@ impl SortByComponent {
             SortByComponent::DocId { order } => *order,
             SortByComponent::FastField { order, .. } => *order,
             SortByComponent::Score { order } => *order,
+        }
+    }
+    /// Position of the documents without a sort value. Only fast fields can have missing values.
+    pub fn sort_missing(&self) -> SortMissing {
+        match self {
+            SortByComponent::FastField { missing, .. } => *missing,
+            SortByComponent::DocId { .. } | SortByComponent::Score { .. } => SortMissing::Last,
         }
     }
 }
@@ -792,7 +800,7 @@ impl Collector for QuickwitCollector {
             None => None,
         };
         let score_extractor = get_score_extractor(&self.sort_by, segment_reader)?;
-        let (order1, order2) = self.sort_by.sort_orders();
+        let sort_key_mapper = self.sort_by.sort_key_mapper();
 
         let segment_top_k_collector = if leaf_max_hits == 0 {
             None
@@ -803,8 +811,7 @@ impl Collector for QuickwitCollector {
                 leaf_max_hits,
                 segment_ord,
                 self.search_after.clone(),
-                order1,
-                order2,
+                sort_key_mapper,
             );
             Some(coll)
         };
@@ -839,12 +846,10 @@ impl Collector for QuickwitCollector {
         // All leaves will return their top [0..start_offset + max_hits) documents.
         // We compute the overall [0..start_offset + max_hits) documents ...
         let num_hits = self.start_offset + self.max_hits;
-        let (sort_order1, sort_order2) = self.sort_by.sort_orders();
         let mut merged_leaf_response = merge_leaf_responses(
             &self.aggregation,
             segment_fruits?,
-            sort_order1,
-            sort_order2,
+            self.sort_by.sort_key_mapper(),
             num_hits,
         )?;
         // ... and drop the first [..start_offsets) hits.
@@ -917,8 +922,7 @@ fn merge_intermediate_aggregation_result<'a>(
 fn merge_leaf_responses(
     aggregations_opt: &Option<QuickwitAggregations>,
     mut leaf_responses: Vec<LeafSearchResponse>,
-    sort_order1: SortOrder,
-    sort_order2: SortOrder,
+    sort_key_mapper: HitSortingMapper,
     max_hits: usize,
 ) -> tantivy::Result<LeafSearchResponse> {
     // Optimization: No merging needed if there is only one result.
@@ -959,12 +963,8 @@ fn merge_leaf_responses(
         .into_iter()
         .flat_map(|leaf_response| leaf_response.partial_hits)
         .collect();
-    let top_k_partial_hits: Vec<PartialHit> = top_k_partial_hits(
-        all_partial_hits.into_iter(),
-        sort_order1,
-        sort_order2,
-        max_hits,
-    );
+    let top_k_partial_hits: Vec<PartialHit> =
+        top_k_partial_hits(all_partial_hits.into_iter(), sort_key_mapper, max_hits);
     Ok(LeafSearchResponse {
         intermediate_aggregation_result: merged_intermediate_aggregation_result,
         num_hits,
@@ -982,11 +982,9 @@ fn merge_leaf_responses(
 /// TODO we could possibly optimize the sort away (but I doubt it matters).
 fn top_k_partial_hits(
     partial_hits: impl Iterator<Item = PartialHit>,
-    order1: SortOrder,
-    order2: SortOrder,
+    sort_key_mapper: HitSortingMapper,
     num_hits: usize,
 ) -> Vec<PartialHit> {
-    let sort_key_mapper = HitSortingMapper { order1, order2 };
     let mut top_k_hits = TopK::new(num_hits, sort_key_mapper);
 
     partial_hits.for_each(|hit| top_k_hits.add_entry(hit));
@@ -995,7 +993,8 @@ fn top_k_partial_hits(
 }
 
 pub(crate) fn sort_by_from_request(search_request: &SearchRequest) -> SortByPair {
-    let to_sort_by_component = |field_name: &str, order| {
+    let to_sort_by_component = |sort_field: &SortField, order| {
+        let field_name = sort_field.field_name.as_str();
         if field_name == "_score" {
             SortByComponent::Score { order }
         } else if field_name == "_shard_doc" || field_name == "_doc" {
@@ -1004,6 +1003,7 @@ pub(crate) fn sort_by_from_request(search_request: &SearchRequest) -> SortByPair
             SortByComponent::FastField {
                 field_name: field_name.to_string(),
                 order,
+                missing: sort_field.missing(),
             }
         }
     };
@@ -1017,15 +1017,15 @@ pub(crate) fn sort_by_from_request(search_request: &SearchRequest) -> SortByPair
     } else if num_sort_fields == 1 {
         let sort_field = &search_request.sort_fields[0];
         let order = SortOrder::try_from(sort_field.sort_order).unwrap_or(SortOrder::Desc);
-        to_sort_by_component(&sort_field.field_name, order).into()
+        to_sort_by_component(sort_field, order).into()
     } else if num_sort_fields == 2 {
         let sort_field1 = &search_request.sort_fields[0];
         let order1 = SortOrder::try_from(sort_field1.sort_order).unwrap_or(SortOrder::Desc);
         let sort_field2 = &search_request.sort_fields[1];
         let order2 = SortOrder::try_from(sort_field2.sort_order).unwrap_or(SortOrder::Desc);
         SortByPair {
-            first: to_sort_by_component(&sort_field1.field_name, order1),
-            second: Some(to_sort_by_component(&sort_field2.field_name, order2)),
+            first: to_sort_by_component(sort_field1, order1),
+            second: Some(to_sort_by_component(sort_field2, order2)),
         }
     } else {
         panic!("Sort by more than 2 fields is not supported yet.")
@@ -1091,6 +1091,10 @@ pub struct SegmentPartialHitSortingKey {
     sort_order: SortOrder,
     // TODO This should not be there.
     sort_order2: SortOrder,
+    // TODO This should not be there.
+    missing: SortMissing,
+    // TODO This should not be there.
+    missing2: SortMissing,
 }
 
 impl Ord for SegmentPartialHitSortingKey {
@@ -1103,12 +1107,21 @@ impl Ord for SegmentPartialHitSortingKey {
             self.sort_order2, other.sort_order2,
             "comparing two PartialHitSortingKey of different ordering"
         );
-        let order = self
-            .sort_order
-            .compare_opt(&self.sort_value, &other.sort_value);
-        let order2 = self
-            .sort_order2
-            .compare_opt(&self.sort_value2, &other.sort_value2);
+        debug_assert_eq!(
+            (self.missing, self.missing2),
+            (other.missing, other.missing2),
+            "comparing two PartialHitSortingKey of different missing value ordering"
+        );
+        let order = self.sort_order.compare_opt_with_missing(
+            &self.sort_value,
+            &other.sort_value,
+            self.missing,
+        );
+        let order2 = self.sort_order2.compare_opt_with_missing(
+            &self.sort_value2,
+            &other.sort_value2,
+            self.missing2,
+        );
         let order_addr = self.sort_order.compare(&self.doc_id, &other.doc_id);
         order.then(order2).then(order_addr)
     }
@@ -1128,6 +1141,8 @@ pub(crate) struct PartialHitSortingKey {
     // TODO remove this
     sort_order: SortOrder,
     sort_order2: SortOrder,
+    missing: SortMissing,
+    missing2: SortMissing,
 }
 
 impl Ord for PartialHitSortingKey {
@@ -1140,14 +1155,23 @@ impl Ord for PartialHitSortingKey {
             self.sort_order2, other.sort_order2,
             "comparing two PartialHitSortingKey of different ordering"
         );
+        assert_eq!(
+            (self.missing, self.missing2),
+            (other.missing, other.missing2),
+            "comparing two PartialHitSortingKey of different missing value ordering"
+        );
 
-        let order = self
-            .sort_order
-            .compare_opt(&self.sort_value, &other.sort_value);
+        let order = self.sort_order.compare_opt_with_missing(
+            &self.sort_value,
+            &other.sort_value,
+            self.missing,
+        );
 
-        let order2 = self
-            .sort_order2
-            .compare_opt(&self.sort_value2, &other.sort_value2);
+        let order2 = self.sort_order2.compare_opt_with_missing(
+            &self.sort_value2,
+            &other.sort_value2,
+            self.missing2,
+        );
 
         let order_addr = self.sort_order.compare(&self.address, &other.address);
 
@@ -1161,10 +1185,35 @@ impl PartialOrd for PartialHitSortingKey {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct HitSortingMapper {
     pub order1: SortOrder,
     pub order2: SortOrder,
+    /// Position of the hits without a first sort value.
+    pub missing1: SortMissing,
+    /// Position of the hits without a second sort value.
+    pub missing2: SortMissing,
+}
+
+impl HitSortingMapper {
+    /// Returns true if hits without a sort value can rank before hits with a sort value.
+    pub fn has_missing_first(&self) -> bool {
+        self.missing1 == SortMissing::First || self.missing2 == SortMissing::First
+    }
+
+    /// Compares two first sort values, `Ordering::Greater` meaning that `this` ranks first.
+    #[inline]
+    pub fn compare1<T: Ord>(&self, this: &Option<T>, other: &Option<T>) -> Ordering {
+        self.order1
+            .compare_opt_with_missing(this, other, self.missing1)
+    }
+
+    /// Compares two second sort values, `Ordering::Greater` meaning that `this` ranks first.
+    #[inline]
+    pub fn compare2<T: Ord>(&self, this: &Option<T>, other: &Option<T>) -> Ordering {
+        self.order2
+            .compare_opt_with_missing(this, other, self.missing2)
+    }
 }
 
 impl SortKeyMapper<PartialHit> for HitSortingMapper {
@@ -1176,6 +1225,8 @@ impl SortKeyMapper<PartialHit> for HitSortingMapper {
             address: GlobalDocAddress::from_partial_hit(partial_hit),
             sort_order: self.order1,
             sort_order2: self.order2,
+            missing: self.missing1,
+            missing2: self.missing2,
         }
     }
 }
@@ -1189,6 +1240,8 @@ impl SortKeyMapper<SegmentPartialHit> for HitSortingMapper {
             doc_id: partial_hit.doc_id,
             sort_order: self.order1,
             sort_order2: self.order2,
+            missing: self.missing1,
+            missing2: self.missing2,
         }
     }
 }
@@ -1214,8 +1267,7 @@ impl IncrementalCollector {
             .as_ref()
             .map(QuickwitAggregations::maybe_incremental_aggregator)
             .unwrap_or(QuickwitIncrementalAggregations::NoAggregation);
-        let (order1, order2) = collector.sort_by.sort_orders();
-        let sort_key_mapper = HitSortingMapper { order1, order2 };
+        let sort_key_mapper = collector.sort_by.sort_key_mapper();
         IncrementalCollector {
             top_k_hits: TopK::new(collector.max_hits + collector.start_offset, sort_key_mapper),
             start_offset: collector.start_offset,
@@ -1321,7 +1373,7 @@ mod tests {
 
     use quickwit_proto::search::{
         LeafResourceStats, LeafSearchResponse, PartialHit, SearchRequest, SortByValue, SortField,
-        SortOrder, SortValue, SplitResourceStats, SplitSearchError,
+        SortMissing, SortOrder, SortValue, SplitResourceStats, SplitSearchError,
     };
     use quickwit_proto::types::SplitId;
     use tantivy::TantivyDocument;
@@ -1329,9 +1381,18 @@ mod tests {
     use tantivy::aggregation::intermediate_agg_result::IntermediateAggregationResults;
     use tantivy::collector::Collector;
 
-    use super::{IncrementalCollector, make_merge_collector};
+    use super::{HitSortingMapper, IncrementalCollector, make_merge_collector};
     use crate::QuickwitAggregations;
     use crate::collector::{merge_intermediate_aggregation_result, top_k_partial_hits};
+
+    fn missing_last_mapper(order1: SortOrder, order2: SortOrder) -> HitSortingMapper {
+        HitSortingMapper {
+            order1,
+            order2,
+            missing1: SortMissing::Last,
+            missing2: SortMissing::Last,
+        }
+    }
 
     #[test]
     fn test_merge_partial_hits_no_tie() {
@@ -1345,8 +1406,7 @@ mod tests {
         assert_eq!(
             top_k_partial_hits(
                 vec![make_doc(1u64), make_doc(3u64), make_doc(2u64),].into_iter(),
-                SortOrder::Asc,
-                SortOrder::Asc,
+                missing_last_mapper(SortOrder::Asc, SortOrder::Asc),
                 2
             ),
             vec![make_doc(1), make_doc(2)]
@@ -1370,8 +1430,7 @@ mod tests {
                     make_hit_given_split_id(2u64),
                 ]
                 .into_iter(),
-                SortOrder::Desc,
-                SortOrder::Desc,
+                missing_last_mapper(SortOrder::Desc, SortOrder::Desc),
                 2
             ),
             &[make_hit_given_split_id(3), make_hit_given_split_id(2)]
@@ -1384,8 +1443,7 @@ mod tests {
                     make_hit_given_split_id(2u64),
                 ]
                 .into_iter(),
-                SortOrder::Asc,
-                SortOrder::Asc,
+                missing_last_mapper(SortOrder::Asc, SortOrder::Asc),
                 2
             ),
             &[make_hit_given_split_id(1), make_hit_given_split_id(2)]
@@ -1416,6 +1474,8 @@ mod tests {
         ]
     }
 
+    /// Builds a request from a comma separated list of sort fields. A `-` prefix sorts in
+    /// ascending order, a `:first` suffix ranks the documents without a value first.
     fn make_request(max_hits: u64, sort_fields: &str) -> SearchRequest {
         SearchRequest {
             max_hits,
@@ -1423,18 +1483,19 @@ mod tests {
                 .split(',')
                 .filter(|field| !field.is_empty())
                 .map(|field| {
-                    if let Some(field) = field.strip_prefix('-') {
-                        SortField {
-                            field_name: field.to_string(),
-                            sort_order: SortOrder::Asc.into(),
-                            sort_datetime_format: None,
-                        }
-                    } else {
-                        SortField {
-                            field_name: field.to_string(),
-                            sort_order: SortOrder::Desc.into(),
-                            sort_datetime_format: None,
-                        }
+                    let (field, sort_order) = match field.strip_prefix('-') {
+                        Some(field) => (field, SortOrder::Asc),
+                        None => (field, SortOrder::Desc),
+                    };
+                    let (field, missing) = match field.strip_suffix(":first") {
+                        Some(field) => (field, SortMissing::First),
+                        None => (field, SortMissing::Last),
+                    };
+                    SortField {
+                        field_name: field.to_string(),
+                        sort_order: sort_order as i32,
+                        sort_datetime_format: None,
+                        missing: missing as i32,
                     }
                 })
                 .collect(),
@@ -1683,11 +1744,13 @@ mod tests {
                         field_name: "sort1".to_string(),
                         sort_order: SortOrder::Desc.into(),
                         sort_datetime_format: None,
+                        missing: SortMissing::Last as i32,
                     },
                     SortField {
                         field_name: "sort2".to_string(),
                         sort_order: SortOrder::Asc.into(),
                         sort_datetime_format: None,
+                        missing: SortMissing::Last as i32,
                     },
                 ],
                 search_after: Some(search_after),
@@ -1726,6 +1789,7 @@ mod tests {
                     field_name: "_shard_doc".to_string(),
                     sort_order: SortOrder::Desc.into(),
                     sort_datetime_format: None,
+                    missing: SortMissing::Last as i32,
                 }],
                 search_after: Some(search_after),
                 ..SearchRequest::default()
@@ -1774,6 +1838,310 @@ mod tests {
         }
     }
 
+    type SortSpec = (SortOrder, SortMissing);
+
+    /// Reference implementation of the ranking of the documents of `sort_dataset()`.
+    /// Returns `Ordering::Less` if `left` ranks before `right`.
+    fn reference_doc_ordering(
+        left: &(usize, (Option<u64>, Option<u64>)),
+        right: &(usize, (Option<u64>, Option<u64>)),
+        sort1: SortSpec,
+        sort2: Option<SortSpec>,
+    ) -> Ordering {
+        let cmp_value =
+            |left: Option<u64>, right: Option<u64>, (order, missing): SortSpec| match (left, right)
+            {
+                (Some(left), Some(right)) => match order {
+                    SortOrder::Asc => left.cmp(&right),
+                    SortOrder::Desc => right.cmp(&left),
+                },
+                (None, None) => Ordering::Equal,
+                (None, Some(_)) => match missing {
+                    SortMissing::First => Ordering::Less,
+                    SortMissing::Last => Ordering::Greater,
+                },
+                (Some(_), None) => match missing {
+                    SortMissing::First => Ordering::Greater,
+                    SortMissing::Last => Ordering::Less,
+                },
+            };
+        let cmp_doc_id = match sort1.0 {
+            SortOrder::Asc => left.0.cmp(&right.0),
+            SortOrder::Desc => right.0.cmp(&left.0),
+        };
+        let cmp2 = match sort2 {
+            Some(sort2) => cmp_value(left.1.1, right.1.1, sort2),
+            None => Ordering::Equal,
+        };
+        cmp_value(left.1.0, right.1.0, sort1)
+            .then(cmp2)
+            .then(cmp_doc_id)
+    }
+
+    fn missing_sort_cases() -> Vec<(&'static str, SortSpec, Option<SortSpec>)> {
+        use SortMissing::{First, Last};
+        use SortOrder::{Asc, Desc};
+        vec![
+            ("sort1", (Desc, Last), None),
+            ("-sort1", (Asc, Last), None),
+            ("sort1:first", (Desc, First), None),
+            ("-sort1:first", (Asc, First), None),
+            ("sort1:first,sort2", (Desc, First), Some((Desc, Last))),
+            ("-sort1:first,sort2", (Asc, First), Some((Desc, Last))),
+            ("sort1,-sort2:first", (Desc, Last), Some((Asc, First))),
+            ("-sort1,sort2:first", (Asc, Last), Some((Desc, First))),
+            (
+                "sort1:first,sort2:first",
+                (Desc, First),
+                Some((Desc, First)),
+            ),
+            (
+                "-sort1:first,-sort2:first",
+                (Asc, First),
+                Some((Asc, First)),
+            ),
+        ]
+    }
+
+    #[test]
+    fn test_single_split_sorting_missing_values() {
+        let index = make_index();
+        let reader = index.reader().unwrap();
+        let searcher = reader.searcher();
+
+        for (sort_str, sort1, sort2) in missing_sort_cases() {
+            let mut dataset: Vec<(usize, (Option<u64>, Option<u64>))> =
+                sort_dataset().into_iter().enumerate().collect();
+            dataset.sort_by(|left, right| reference_doc_ordering(left, right, sort1, sort2));
+            let expected_doc_ids: Vec<u32> =
+                dataset.iter().map(|(doc_id, _)| *doc_id as u32).collect();
+
+            for slice_len in 0..=dataset.len() {
+                let collector = super::make_collector_for_split(
+                    SplitId::from("fake_split_id"),
+                    &make_request(slice_len as u64, sort_str),
+                    Default::default(),
+                )
+                .unwrap();
+                let res = searcher
+                    .search(&tantivy::query::AllQuery, &collector)
+                    .unwrap();
+                let doc_ids: Vec<u32> = res.partial_hits.iter().map(|hit| hit.doc_id).collect();
+                assert_eq!(
+                    doc_ids,
+                    &expected_doc_ids[..slice_len],
+                    "mismatch ordering for \"{sort_str}\":{slice_len}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_search_after_missing_values() {
+        let index = make_index();
+        let reader = index.reader().unwrap();
+        let searcher = reader.searcher();
+
+        for (sort_str, sort1, sort2) in missing_sort_cases() {
+            let mut dataset: Vec<(usize, (Option<u64>, Option<u64>))> =
+                sort_dataset().into_iter().enumerate().collect();
+            dataset.sort_by(|left, right| reference_doc_ordering(left, right, sort1, sort2));
+
+            for (i, (doc_id, (value1, value2))) in dataset.iter().enumerate() {
+                let search_after = PartialHit {
+                    split_id: "fake_split_id".to_string(),
+                    segment_ord: 0,
+                    doc_id: *doc_id as u32,
+                    sort_value: Some(SortByValue {
+                        sort_value: value1.map(SortValue::U64),
+                    }),
+                    sort_value2: sort2.map(|_| SortByValue {
+                        sort_value: value2.map(SortValue::U64),
+                    }),
+                };
+                let request = SearchRequest {
+                    search_after: Some(search_after),
+                    ..make_request(1000, sort_str)
+                };
+                let collector = super::make_collector_for_split(
+                    SplitId::from("fake_split_id"),
+                    &request,
+                    Default::default(),
+                )
+                .unwrap();
+                let res = searcher
+                    .search(&tantivy::query::AllQuery, &collector)
+                    .unwrap();
+                assert_eq!(res.num_hits, dataset.len() as u64);
+                let doc_ids: Vec<u32> = res.partial_hits.iter().map(|hit| hit.doc_id).collect();
+                let expected_doc_ids: Vec<u32> = dataset[i + 1..]
+                    .iter()
+                    .map(|(doc_id, _)| *doc_id as u32)
+                    .collect();
+                assert_eq!(
+                    doc_ids, expected_doc_ids,
+                    "mismatch search_after for \"{sort_str}\" after {i}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_search_after_out_of_bounds_missing_values() {
+        let index = make_index();
+        let reader = index.reader().unwrap();
+        let searcher = reader.searcher();
+        let num_docs = sort_dataset().len();
+        let num_docs_with_sort1 = sort_dataset()
+            .iter()
+            .filter(|(value1, _)| value1.is_some())
+            .count();
+
+        // A negative search_after value on a u64 field sorted in ascending order ranks before
+        // every value of the segment.
+        for (sort_str, expected_num_hits_without_sort1) in [
+            ("-sort1", num_docs - num_docs_with_sort1),
+            // The documents without a value rank before the search_after value.
+            ("-sort1:first", 0),
+        ] {
+            let search_after = PartialHit {
+                split_id: "fake_split_id".to_string(),
+                segment_ord: 0,
+                doc_id: 0,
+                sort_value: Some(SortValue::I64(-1).into()),
+                sort_value2: None,
+            };
+            let request = SearchRequest {
+                search_after: Some(search_after),
+                ..make_request(1000, sort_str)
+            };
+            let collector = super::make_collector_for_split(
+                SplitId::from("fake_split_id"),
+                &request,
+                Default::default(),
+            )
+            .unwrap();
+            let res = searcher
+                .search(&tantivy::query::AllQuery, &collector)
+                .unwrap();
+            let num_hits_without_sort1 = res
+                .partial_hits
+                .iter()
+                .filter(|hit| hit.sort_value.and_then(|value| value.sort_value).is_none())
+                .count();
+            assert_eq!(
+                res.partial_hits.len(),
+                num_docs_with_sort1 + expected_num_hits_without_sort1,
+                "{sort_str}"
+            );
+            assert_eq!(
+                num_hits_without_sort1, expected_num_hits_without_sort1,
+                "{sort_str}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_merge_partial_hits_missing_first() {
+        let make_hit = |sort_value: Option<u64>, doc_id: u32| PartialHit {
+            sort_value: Some(SortByValue {
+                sort_value: sort_value.map(SortValue::U64),
+            }),
+            sort_value2: None,
+            split_id: "split1".to_string(),
+            segment_ord: 0u32,
+            doc_id,
+        };
+        let hits = || {
+            vec![
+                make_hit(Some(1), 0),
+                make_hit(None, 1),
+                make_hit(Some(3), 2),
+                make_hit(Some(2), 3),
+            ]
+            .into_iter()
+        };
+        let missing_first_mapper = |order1| HitSortingMapper {
+            order1,
+            order2: SortOrder::Desc,
+            missing1: SortMissing::First,
+            missing2: SortMissing::Last,
+        };
+        assert_eq!(
+            top_k_partial_hits(hits(), missing_first_mapper(SortOrder::Asc), 3),
+            vec![
+                make_hit(None, 1),
+                make_hit(Some(1), 0),
+                make_hit(Some(2), 3)
+            ]
+        );
+        assert_eq!(
+            top_k_partial_hits(hits(), missing_first_mapper(SortOrder::Desc), 3),
+            vec![
+                make_hit(None, 1),
+                make_hit(Some(3), 2),
+                make_hit(Some(2), 3)
+            ]
+        );
+        assert_eq!(
+            top_k_partial_hits(
+                hits(),
+                missing_last_mapper(SortOrder::Desc, SortOrder::Desc),
+                4
+            ),
+            vec![
+                make_hit(Some(3), 2),
+                make_hit(Some(2), 3),
+                make_hit(Some(1), 0),
+                make_hit(None, 1)
+            ]
+        );
+    }
+
+    #[test]
+    fn test_merge_collectors_missing_first() {
+        let make_hit = |sort_value: Option<u64>, split_id: &str, doc_id: u32| PartialHit {
+            sort_value: Some(SortByValue {
+                sort_value: sort_value.map(SortValue::U64),
+            }),
+            sort_value2: None,
+            split_id: split_id.to_string(),
+            segment_ord: 0u32,
+            doc_id,
+        };
+        let make_leaf_response = |partial_hits: Vec<PartialHit>| LeafSearchResponse {
+            num_hits: partial_hits.len() as u64,
+            partial_hits,
+            failed_splits: Vec::new(),
+            num_attempted_splits: 1,
+            num_successful_splits: 1,
+            intermediate_aggregation_result: None,
+            resource_stats: None,
+        };
+        let request = make_request(3, "-sort1:first");
+        let result = merge_collector_equal_results(
+            &request,
+            vec![
+                make_leaf_response(vec![
+                    make_hit(None, "split1", 1),
+                    make_hit(Some(1), "split1", 0),
+                ]),
+                make_leaf_response(vec![
+                    make_hit(None, "split2", 3),
+                    make_hit(Some(0), "split2", 2),
+                ]),
+            ],
+        );
+        assert_eq!(
+            result.partial_hits,
+            vec![
+                make_hit(None, "split1", 1),
+                make_hit(None, "split2", 3),
+                make_hit(Some(0), "split2", 2),
+            ]
+        );
+    }
+
     fn merge_collector_equal_results(
         request: &SearchRequest,
         results: Vec<LeafSearchResponse>,
@@ -1804,6 +2172,7 @@ mod tests {
                     field_name: "timestamp".to_string(),
                     sort_order: SortOrder::Desc as i32,
                     sort_datetime_format: None,
+                    missing: SortMissing::Last as i32,
                 }],
                 aggregation_request: None,
                 ..Default::default()
@@ -1852,6 +2221,7 @@ mod tests {
                     field_name: "timestamp".to_string(),
                     sort_order: SortOrder::Desc as i32,
                     sort_datetime_format: None,
+                    missing: SortMissing::Last as i32,
                 }],
                 aggregation_request: None,
                 ..Default::default()
@@ -1944,6 +2314,7 @@ mod tests {
                     field_name: "timestamp".to_string(),
                     sort_order: SortOrder::Asc as i32,
                     sort_datetime_format: None,
+                    missing: SortMissing::Last as i32,
                 }],
                 aggregation_request: None,
                 ..Default::default()

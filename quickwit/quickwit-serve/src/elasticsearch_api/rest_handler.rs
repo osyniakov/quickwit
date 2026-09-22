@@ -551,6 +551,7 @@ fn build_request_for_es_api(
                 .date_format
                 .clone()
                 .map(|date_format| SortDatetimeFormat::from(date_format) as i32),
+            missing: sort_field.missing as i32,
         })
         .take_while_inclusive(|sort_field| !is_doc_field(sort_field))
         .collect();
@@ -1235,7 +1236,7 @@ pub(crate) fn str_lines(body: &str) -> impl Iterator<Item = &str> {
 
 #[cfg(test)]
 mod tests {
-    use quickwit_proto::search::SplitSearchError;
+    use quickwit_proto::search::{SortMissing, SplitSearchError};
     use warp::hyper::StatusCode;
 
     use super::{partial_hit_from_search_after_param, *};
@@ -1259,6 +1260,7 @@ mod tests {
             field_name: "field1".to_string(),
             sort_order: 1,
             sort_datetime_format: None,
+            missing: SortMissing::Last as i32,
         }];
         let error = partial_hit_from_search_after_param(search_after, sort_order).unwrap_err();
         assert_eq!(error.status, StatusCode::BAD_REQUEST);
@@ -1275,6 +1277,7 @@ mod tests {
             field_name: "_doc".to_string(),
             sort_order: 1,
             sort_datetime_format: None,
+            missing: SortMissing::Last as i32,
         }];
         let error = partial_hit_from_search_after_param(search_after, sort_order).unwrap_err();
         assert_eq!(error.status, StatusCode::BAD_REQUEST);

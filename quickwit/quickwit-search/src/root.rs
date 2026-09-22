@@ -1920,7 +1920,7 @@ mod tests {
         MockMetastoreService,
     };
     use quickwit_proto::search::{
-        ScrollRequest, SortByValue, SortOrder, SortValue, SplitSearchError,
+        ScrollRequest, SortByValue, SortMissing, SortOrder, SortValue, SplitSearchError,
     };
     use quickwit_query::query_ast::{qast_helper, qast_json_helper, query_ast_from_user_text};
     use tantivy::schema::{FAST, STORED, TEXT};
@@ -2034,11 +2034,13 @@ mod tests {
                     field_name: "timestamp".to_string(),
                     sort_order: SortOrder::Desc as i32,
                     sort_datetime_format: Some(SortDatetimeFormat::UnixTimestampMillis as i32),
+                    missing: SortMissing::Last as i32,
                 },
                 SortField {
                     field_name: "_doc".to_string(),
                     sort_order: SortOrder::Asc as i32,
                     sort_datetime_format: None,
+                    missing: SortMissing::Last as i32,
                 },
             ],
             ..Default::default()
@@ -2207,6 +2209,7 @@ mod tests {
                 field_name: "response_date".to_string(),
                 sort_order: SortOrder::Desc as i32,
                 sort_datetime_format: None,
+                missing: SortMissing::Last as i32,
             }],
             ..Default::default()
         };
@@ -2300,11 +2303,13 @@ mod tests {
                 field_name: "_doc".to_string(),
                 sort_order: 0,
                 sort_datetime_format: None,
+                missing: SortMissing::Last as i32,
             },
             SortField {
                 field_name: "_shard_doc".to_string(),
                 sort_order: 0,
                 sort_datetime_format: None,
+                missing: SortMissing::Last as i32,
             },
         ];
         let mut schema_builder = Schema::builder();
@@ -2324,11 +2329,13 @@ mod tests {
                 field_name: "timestamp".to_string(),
                 sort_order: 0,
                 sort_datetime_format: None,
+                missing: SortMissing::Last as i32,
             },
             SortField {
                 field_name: "id".to_string(),
                 sort_order: 0,
                 sort_datetime_format: None,
+                missing: SortMissing::Last as i32,
             },
         ];
         let mut schema_builder = Schema::builder();
@@ -2348,11 +2355,13 @@ mod tests {
                 field_name: "timestamp".to_string(),
                 sort_order: 0,
                 sort_datetime_format: None,
+                missing: SortMissing::Last as i32,
             },
             SortField {
                 field_name: "id".to_string(),
                 sort_order: 0,
                 sort_datetime_format: None,
+                missing: SortMissing::Last as i32,
             },
         ];
         let mut schema_builder = Schema::builder();
@@ -2391,11 +2400,13 @@ mod tests {
                 field_name: "timestamp".to_string(),
                 sort_order: 0,
                 sort_datetime_format: Some(SortDatetimeFormat::UnixTimestampMillis as i32),
+                missing: SortMissing::Last as i32,
             },
             SortField {
                 field_name: "id".to_string(),
                 sort_order: 0,
                 sort_datetime_format: None,
+                missing: SortMissing::Last as i32,
             },
         ];
         validate_sort_by_fields_and_search_after(&sort_fields, &None).unwrap();
@@ -2408,11 +2419,13 @@ mod tests {
                 field_name: "timestamp".to_string(),
                 sort_order: 0,
                 sort_datetime_format: Some(SortDatetimeFormat::UnixTimestampMillis as i32),
+                missing: SortMissing::Last as i32,
             },
             SortField {
                 field_name: "id".to_string(),
                 sort_order: 0,
                 sort_datetime_format: None,
+                missing: SortMissing::Last as i32,
             },
         ];
         let partial_hit = PartialHit {
@@ -2436,11 +2449,13 @@ mod tests {
                 field_name: "timestamp".to_string(),
                 sort_order: 0,
                 sort_datetime_format: Some(SortDatetimeFormat::UnixTimestampMillis as i32),
+                missing: SortMissing::Last as i32,
             },
             SortField {
                 field_name: "_doc".to_string(),
                 sort_order: 0,
                 sort_datetime_format: None,
+                missing: SortMissing::Last as i32,
             },
         ];
         let partial_hit = PartialHit {
@@ -2505,11 +2520,13 @@ mod tests {
                 field_name: "timestamp".to_string(),
                 sort_order: 0,
                 sort_datetime_format: Some(SortDatetimeFormat::UnixTimestampMillis as i32),
+                missing: SortMissing::Last as i32,
             },
             SortField {
                 field_name: "id".to_string(),
                 sort_order: 0,
                 sort_datetime_format: None,
+                missing: SortMissing::Last as i32,
             },
         ];
         let partial_hit = PartialHit {
@@ -2538,11 +2555,13 @@ mod tests {
                 field_name: "timestamp".to_string(),
                 sort_order: 0,
                 sort_datetime_format: Some(SortDatetimeFormat::UnixTimestampMillis as i32),
+                missing: SortMissing::Last as i32,
             },
             SortField {
                 field_name: "_doc".to_string(),
                 sort_order: 0,
                 sort_datetime_format: None,
+                missing: SortMissing::Last as i32,
             },
         ];
         let partial_hit = PartialHit {
@@ -2571,11 +2590,13 @@ mod tests {
                 field_name: "timestamp".to_string(),
                 sort_order: 0,
                 sort_datetime_format: Some(SortDatetimeFormat::UnixTimestampMillis as i32),
+                missing: SortMissing::Last as i32,
             },
             SortField {
                 field_name: "id".to_string(),
                 sort_order: 0,
                 sort_datetime_format: None,
+                missing: SortMissing::Last as i32,
             },
         ];
         let partial_hit = PartialHit {
@@ -2619,16 +2640,19 @@ mod tests {
                 field_name: "timestamp".to_string(),
                 sort_order: 0,
                 sort_datetime_format: Some(SortDatetimeFormat::UnixTimestampMillis as i32),
+                missing: SortMissing::Last as i32,
             },
             SortField {
                 field_name: "timestamp".to_string(),
                 sort_order: 0,
                 sort_datetime_format: Some(SortDatetimeFormat::UnixTimestampMillis as i32),
+                missing: SortMissing::Last as i32,
             },
             SortField {
                 field_name: "timestamp".to_string(),
                 sort_order: 0,
                 sort_datetime_format: Some(SortDatetimeFormat::UnixTimestampMillis as i32),
+                missing: SortMissing::Last as i32,
             },
         ];
         let error = validate_sort_by_fields_and_search_after(&sort_fields, &None).unwrap_err();
@@ -3369,6 +3393,7 @@ mod tests {
                 field_name: "response_date".to_string(),
                 sort_order: SortOrder::Asc.into(),
                 sort_datetime_format: Some(SortDatetimeFormat::UnixTimestampNanos as i32),
+                missing: SortMissing::Last as i32,
             }],
             ..Default::default()
         };
@@ -3551,6 +3576,7 @@ mod tests {
                 field_name: "response_date".to_string(),
                 sort_order: SortOrder::Desc.into(),
                 sort_datetime_format: Some(SortDatetimeFormat::UnixTimestampNanos as i32),
+                missing: SortMissing::Last as i32,
             }],
             ..Default::default()
         };

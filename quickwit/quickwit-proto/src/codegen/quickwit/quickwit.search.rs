@@ -235,6 +235,10 @@ pub struct SortField {
     /// unix_timestamp_nanos.
     #[prost(enumeration = "SortDatetimeFormat", optional, tag = "3")]
     pub sort_datetime_format: ::core::option::Option<i32>,
+    /// Position of the documents that have no value for the sort field.
+    #[prost(enumeration = "SortMissing", tag = "4")]
+    #[serde(default)]
+    pub missing: i32,
 }
 #[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -859,6 +863,38 @@ impl CountHits {
         match value {
             "COUNT_ALL" => Some(Self::CountAll),
             "UNDERESTIMATE" => Some(Self::Underestimate),
+            _ => None,
+        }
+    }
+}
+#[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum SortMissing {
+    /// Documents without a value are ranked after all the other documents,
+    /// regardless of the sort order. This is the default.
+    Last = 0,
+    /// Documents without a value are ranked before all the other documents,
+    /// regardless of the sort order.
+    First = 1,
+}
+impl SortMissing {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Last => "SORT_MISSING_LAST",
+            Self::First => "SORT_MISSING_FIRST",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SORT_MISSING_LAST" => Some(Self::Last),
+            "SORT_MISSING_FIRST" => Some(Self::First),
             _ => None,
         }
     }

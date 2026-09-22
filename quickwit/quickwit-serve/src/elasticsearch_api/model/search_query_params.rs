@@ -16,6 +16,7 @@ use std::fmt;
 use std::str::FromStr;
 use std::time::Duration;
 
+use quickwit_proto::search::SortMissing;
 use quickwit_query::BooleanOperand;
 use quickwit_search::SearchError;
 use serde::{Deserialize, Serialize};
@@ -246,6 +247,7 @@ fn parse_sort_field_str(sort_field_str: &str) -> Result<SortField, SearchError> 
             field: field.to_string(),
             order,
             date_format: None,
+            missing: SortMissing::Last,
         })
     } else {
         let order = default_elasticsearch_sort_order(sort_field_str);
@@ -253,6 +255,7 @@ fn parse_sort_field_str(sort_field_str: &str) -> Result<SortField, SearchError> 
             field: sort_field_str.to_string(),
             order,
             date_format: None,
+            missing: SortMissing::Last,
         })
     }
 }
@@ -408,7 +411,8 @@ mod tests {
             SortField {
                 field: "timestamp".to_string(),
                 order: SortOrder::Desc,
-                date_format: None
+                date_format: None,
+                missing: SortMissing::Last,
             }
         );
         let sort_order_qs = parse_sort_field_str("timestamp:asc").unwrap();
@@ -417,7 +421,8 @@ mod tests {
             SortField {
                 field: "timestamp".to_string(),
                 order: SortOrder::Asc,
-                date_format: None
+                date_format: None,
+                missing: SortMissing::Last,
             }
         );
     }

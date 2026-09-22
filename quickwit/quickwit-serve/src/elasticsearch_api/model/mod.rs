@@ -42,7 +42,7 @@ pub(crate) use mappings::ElasticsearchMappingsResponse;
 pub use multi_search::{
     MultiSearchHeader, MultiSearchQueryParams, MultiSearchResponse, MultiSearchSingleResponse,
 };
-use quickwit_proto::search::{SortDatetimeFormat, SortOrder};
+use quickwit_proto::search::{SortDatetimeFormat, SortMissing, SortOrder};
 pub use scroll::ScrollQueryParams;
 pub use search_body::SearchBody;
 pub use search_query_params::{DeleteQueryParams, SearchQueryParams, SearchQueryParamsCount};
@@ -55,6 +55,8 @@ pub struct SortField {
     pub field: String,
     pub order: SortOrder,
     pub date_format: Option<ElasticDateFormat>,
+    /// Position of the documents without a value for the sort field.
+    pub missing: SortMissing,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

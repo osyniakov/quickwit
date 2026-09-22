@@ -121,12 +121,35 @@ impl TryFrom<metastore::DeleteQuery> for search::SearchRequest {
 }
 
 impl search::SortOrder {
+    /// Compares two optional sort values, `Ordering::Greater` meaning that `this` ranks before
+    /// `other`.
+    ///
+    /// Missing values rank after all present values, regardless of the sort order.
     #[inline(always)]
     pub fn compare_opt<T: Ord>(&self, this: &Option<T>, other: &Option<T>) -> Ordering {
+        self.compare_opt_with_missing(this, other, search::SortMissing::Last)
+    }
+
+    /// Compares two optional sort values, `Ordering::Greater` meaning that `this` ranks before
+    /// `other`.
+    ///
+    /// Missing values rank before or after all present values depending on `missing`,
+    /// regardless of the sort order.
+    #[inline(always)]
+    pub fn compare_opt_with_missing<T: Ord>(
+        &self,
+        this: &Option<T>,
+        other: &Option<T>,
+        missing: search::SortMissing,
+    ) -> Ordering {
+        let present_vs_missing = match missing {
+            search::SortMissing::Last => Ordering::Greater,
+            search::SortMissing::First => Ordering::Less,
+        };
         match (this, other) {
             (Some(this), Some(other)) => self.compare(this, other),
-            (Some(_), None) => Ordering::Greater,
-            (None, Some(_)) => Ordering::Less,
+            (Some(_), None) => present_vs_missing,
+            (None, Some(_)) => present_vs_missing.reverse(),
             (None, None) => Ordering::Equal,
         }
     }

@@ -82,3 +82,77 @@ expected:
       - _source: {"count": -2.5, "id": 4}
       - _source: {"id": 5}
       - _source: {"id": 3}
+---
+# Documents without a value for the sort field are ranked first with `missing: _first`.
+endpoint: _elastic/sortorder/_search
+json:
+  query:
+    match_all: {}
+  sort:
+    - count: {"order" : "asc", "missing": "_first"}
+    - id: {"order" : "asc"}
+expected:
+  hits:
+    total:
+      value: 7
+      relation: "eq"
+    hits:
+      - _source: {"id": 3}
+      - _source: {"id": 5}
+      - _source: {"count": -2.5, "id": 4}
+      - _source: {"count": 10, "id": 0 }
+      - _source: {"count": 10, "id": 1 }
+      - _source: {"count": 10, "id": 2 }
+      - _source: {"count": 15, "id": 2 }
+---
+endpoint: _elastic/sortorder/_search
+json:
+  query:
+    match_all: {}
+  sort:
+    - count: {"order" : "desc", "missing": "_first"}
+    - id: {"order" : "desc"}
+expected:
+  hits:
+    total:
+      value: 7
+      relation: "eq"
+    hits:
+      - _source: {"id": 5}
+      - _source: {"id": 3}
+      - _source: {"count": 15, "id": 2 }
+      - _source: {"count": 10, "id": 2 }
+      - _source: {"count": 10, "id": 1 }
+      - _source: {"count": 10, "id": 0 }
+      - _source: {"count": -2.5, "id": 4}
+---
+# `missing: _last` is the default.
+endpoint: _elastic/sortorder/_search
+json:
+  query:
+    match_all: {}
+  sort:
+    - count: {"order" : "asc", "missing": "_last"}
+    - id: {"order" : "asc"}
+expected:
+  hits:
+    total:
+      value: 7
+      relation: "eq"
+    hits:
+      - _source: {"count": -2.5, "id": 4}
+      - _source: {"count": 10, "id": 0 }
+      - _source: {"count": 10, "id": 1 }
+      - _source: {"count": 10, "id": 2 }
+      - _source: {"count": 15, "id": 2 }
+      - _source: {"id": 3}
+      - _source: {"id": 5}
+---
+# Custom missing values are not supported.
+endpoint: _elastic/sortorder/_search
+json:
+  query:
+    match_all: {}
+  sort:
+    - count: {"order" : "asc", "missing": 0}
+status_code: 400

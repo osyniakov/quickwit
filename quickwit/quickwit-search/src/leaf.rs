@@ -35,7 +35,8 @@ use quickwit_metrics::{GaugeGuard, HistogramTimer};
 use quickwit_proto::search::lambda_single_split_result::Outcome;
 use quickwit_proto::search::{
     CountHits, LeafResourceStats, LeafSearchRequest, LeafSearchResponse, PartialHit, SearchRequest,
-    SortOrder, SortValue, SplitIdAndFooterOffsets, SplitResourceStats, SplitSearchError,
+    SortMissing, SortOrder, SortValue, SplitIdAndFooterOffsets, SplitResourceStats,
+    SplitSearchError,
 };
 use quickwit_proto::types::SplitId;
 use quickwit_query::query_ast::{
@@ -1394,7 +1395,9 @@ impl CanSplitDoBetter {
         } else if let Some((sort_by, timestamp_field)) =
             request.sort_fields.first().zip(timestamp_field_name)
         {
-            if sort_by.field_name == timestamp_field {
+            // Split skipping relies on the split timestamp range, which says nothing about the
+            // documents without a timestamp. These can't be ranked first safely.
+            if sort_by.field_name == timestamp_field && sort_by.missing() == SortMissing::Last {
                 if sort_by.sort_order() == SortOrder::Desc {
                     CanSplitDoBetter::SplitTimestampHigher(None)
                 } else {

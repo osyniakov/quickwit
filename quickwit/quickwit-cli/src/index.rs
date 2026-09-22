@@ -31,7 +31,7 @@ use quickwit_common::tower::{Rate, RateEstimator, SmaRateEstimator};
 use quickwit_common::uri::Uri;
 use quickwit_config::{ConfigFormat, IndexConfig};
 use quickwit_metastore::{IndexMetadata, Split, SplitState};
-use quickwit_proto::search::{CountHits, SortField, SortOrder};
+use quickwit_proto::search::{CountHits, SortField, SortMissing, SortOrder};
 use quickwit_proto::types::IndexId;
 use quickwit_rest_client::models::{IngestSource, SearchResponseRestClient};
 use quickwit_rest_client::rest_client::{CommitType, IngestEvent};
@@ -1106,6 +1106,7 @@ pub async fn search_index(args: SearchIndexArgs) -> anyhow::Result<SearchRespons
             field_name: "_score".to_string(),
             sort_order: SortOrder::Desc as i32,
             sort_datetime_format: None,
+            missing: SortMissing::Last as i32,
         }]
     } else {
         Vec::new()

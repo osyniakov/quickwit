@@ -15,7 +15,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-use quickwit_proto::search::SortOrder;
+use quickwit_proto::search::{SortMissing, SortOrder};
 use quickwit_query::{ElasticQueryDsl, OneFieldMap};
 use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -31,27 +31,58 @@ enum FieldSortParamsForDeser {
     Object {
         order: Option<SortOrder>,
         format: Option<ElasticDateFormat>,
+        // Kept as a raw JSON value and validated in `TryFrom`, so that unsupported values are
+        // rejected instead of making this variant silently fail to match.
+        missing: Option<serde_json::Value>,
     },
     String(SortOrder),
 }
 
-impl From<FieldSortParamsForDeser> for FieldSortParams {
-    fn from(for_deser: FieldSortParamsForDeser) -> FieldSortParams {
+/// Parses the Elasticsearch `missing` sort option.
+///
+/// Only `_first` and `_last` are supported. Elasticsearch also accepts a custom value to use
+/// for the documents without a value, which Quickwit does not support.
+fn parse_sort_missing(missing: serde_json::Value) -> Result<SortMissing, String> {
+    match missing.as_str() {
+        Some("_last") => Ok(SortMissing::Last),
+        Some("_first") => Ok(SortMissing::First),
+        _ => Err(format!(
+            "unsupported sort `missing` value `{missing}`: only `_first` and `_last` are supported"
+        )),
+    }
+}
+
+impl TryFrom<FieldSortParamsForDeser> for FieldSortParams {
+    type Error = String;
+
+    fn try_from(for_deser: FieldSortParamsForDeser) -> Result<FieldSortParams, String> {
         match for_deser {
             FieldSortParamsForDeser::Object {
                 order,
                 format: date_format,
-            } => FieldSortParams { order, date_format },
-            FieldSortParamsForDeser::String(order) => FieldSortParams {
+                missing,
+            } => {
+                let missing = match missing {
+                    Some(missing) => parse_sort_missing(missing)?,
+                    None => SortMissing::Last,
+                };
+                Ok(FieldSortParams {
+                    order,
+                    date_format,
+                    missing,
+                })
+            }
+            FieldSortParamsForDeser::String(order) => Ok(FieldSortParams {
                 order: Some(order),
                 date_format: None,
-            },
+                missing: SortMissing::Last,
+            }),
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(from = "FieldSortParamsForDeser")]
+#[serde(try_from = "FieldSortParamsForDeser")]
 #[serde(deny_unknown_fields)]
 struct FieldSortParams {
     #[serde(default)]
@@ -59,6 +90,8 @@ struct FieldSortParams {
     #[serde(default)]
     #[serde(rename = "format")]
     pub date_format: Option<ElasticDateFormat>,
+    #[serde(default)]
+    pub missing: SortMissing,
 }
 
 #[derive(Debug, Default, Clone, Deserialize, PartialEq)]
@@ -113,6 +146,7 @@ impl From<StringOrMapFieldSort> for SortField {
                     field: field_name,
                     order,
                     date_format: None,
+                    missing: SortMissing::Last,
                 }
             }
             StringOrMapFieldSort::Sort(sort) => {
@@ -124,6 +158,7 @@ impl From<StringOrMapFieldSort> for SortField {
                     field: sort.field,
                     order,
                     date_format: sort.value.date_format,
+                    missing: sort.value.missing,
                 }
             }
         }
@@ -144,6 +179,7 @@ impl<'de> Visitor<'de> for FieldSortVecVisitor {
             field: field_name.to_string(),
             order,
             date_format: None,
+            missing: SortMissing::Last,
         }])
     }
 
@@ -169,6 +205,7 @@ impl<'de> Visitor<'de> for FieldSortVecVisitor {
                 field: field_sort_key,
                 order: sort_order,
                 date_format: field_sort_params.date_format,
+                missing: field_sort_params.missing,
             });
         }
         Ok(sort_fields)
@@ -220,6 +257,60 @@ mod tests {
         assert_eq!(sort_fields[4].field, "_score");
         assert_eq!(sort_fields[4].order, SortOrder::Desc);
         assert_eq!(sort_fields[4].date_format, None);
+    }
+
+    #[test]
+    fn test_sort_field_missing() {
+        let json = r#"
+        {
+            "sort": [
+                { "rank": { "order": "desc", "missing": "_first" } },
+                { "uid": { "missing": "_last" } }
+            ]
+        }
+        "#;
+        let search_body: SearchBody = serde_json::from_str(json).unwrap();
+        let sort_fields = search_body.sort.unwrap();
+        assert_eq!(sort_fields.len(), 2);
+        assert_eq!(sort_fields[0].field, "rank");
+        assert_eq!(sort_fields[0].order, SortOrder::Desc);
+        assert_eq!(sort_fields[0].missing, SortMissing::First);
+        assert_eq!(sort_fields[1].field, "uid");
+        assert_eq!(sort_fields[1].order, SortOrder::Asc);
+        assert_eq!(sort_fields[1].missing, SortMissing::Last);
+
+        let json = r#"
+        {
+            "sort": {
+                "rank": { "order": "asc", "missing": "_first" },
+                "uid": "desc"
+            }
+        }
+        "#;
+        let search_body: SearchBody = serde_json::from_str(json).unwrap();
+        let sort_fields = search_body.sort.unwrap();
+        assert_eq!(sort_fields.len(), 2);
+        assert_eq!(sort_fields[0].missing, SortMissing::First);
+        assert_eq!(sort_fields[1].missing, SortMissing::Last);
+
+        let search_body: SearchBody = serde_json::from_str(r#"{ "sort": ["rank"] }"#).unwrap();
+        assert_eq!(search_body.sort.unwrap()[0].missing, SortMissing::Last);
+    }
+
+    #[test]
+    fn test_sort_field_missing_custom_value_unsupported() {
+        for missing in [r#""foo""#, "0"] {
+            let json_obj = format!(r#"{{ "sort": {{ "rank": {{ "missing": {missing} }} }} }}"#);
+            let error_msg = serde_json::from_str::<SearchBody>(&json_obj)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error_msg.contains("only `_first` and `_last` are supported"),
+                "{error_msg}"
+            );
+            let json_array = format!(r#"{{ "sort": [{{ "rank": {{ "missing": {missing} }} }}] }}"#);
+            serde_json::from_str::<SearchBody>(&json_array).unwrap_err();
+        }
     }
 
     #[test]

@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use percent_encoding::percent_decode_str;
 use quickwit_config::validate_index_id_pattern;
-use quickwit_proto::search::{CountHits, SortField, SortOrder};
+use quickwit_proto::search::{CountHits, SortField, SortMissing, SortOrder};
 use quickwit_query::query_ast::query_ast_from_user_text;
 use quickwit_search::{SearchError, SearchPlanResponseRest, SearchResponseRest, SearchService};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -111,6 +111,7 @@ impl From<String> for SortBy {
                 field_name,
                 sort_order: sort_order as i32,
                 sort_datetime_format: None,
+                missing: SortMissing::Last as i32,
             };
             sort_fields.push(sort_field);
         }
@@ -732,6 +733,7 @@ mod tests {
                     field_name: "field1".to_string(),
                     sort_order: SortOrder::Desc as i32,
                     sort_datetime_format: None,
+                    missing: SortMissing::Last as i32,
                 }],
             ),
             (
@@ -740,6 +742,7 @@ mod tests {
                     field_name: "field1".to_string(),
                     sort_order: SortOrder::Desc as i32,
                     sort_datetime_format: None,
+                    missing: SortMissing::Last as i32,
                 }],
             ),
             (
@@ -748,6 +751,7 @@ mod tests {
                     field_name: "field1".to_string(),
                     sort_order: SortOrder::Asc as i32,
                     sort_datetime_format: None,
+                    missing: SortMissing::Last as i32,
                 }],
             ),
             (
@@ -756,6 +760,7 @@ mod tests {
                     field_name: "_score".to_string(),
                     sort_order: SortOrder::Desc as i32,
                     sort_datetime_format: None,
+                    missing: SortMissing::Last as i32,
                 }],
             ),
             (
@@ -764,6 +769,7 @@ mod tests {
                     field_name: "_score".to_string(),
                     sort_order: SortOrder::Asc as i32,
                     sort_datetime_format: None,
+                    missing: SortMissing::Last as i32,
                 }],
             ),
             (
@@ -772,6 +778,7 @@ mod tests {
                     field_name: "_score".to_string(),
                     sort_order: SortOrder::Desc as i32,
                     sort_datetime_format: None,
+                    missing: SortMissing::Last as i32,
                 }],
             ),
             (
@@ -781,11 +788,13 @@ mod tests {
                         field_name: "field1".to_string(),
                         sort_order: SortOrder::Desc as i32,
                         sort_datetime_format: None,
+                        missing: SortMissing::Last as i32,
                     },
                     SortField {
                         field_name: "field2".to_string(),
                         sort_order: SortOrder::Desc as i32,
                         sort_datetime_format: None,
+                        missing: SortMissing::Last as i32,
                     },
                 ],
             ),
@@ -796,11 +805,13 @@ mod tests {
                         field_name: "field1".to_string(),
                         sort_order: SortOrder::Desc as i32,
                         sort_datetime_format: None,
+                        missing: SortMissing::Last as i32,
                     },
                     SortField {
                         field_name: "field2".to_string(),
                         sort_order: SortOrder::Asc as i32,
                         sort_datetime_format: None,
+                        missing: SortMissing::Last as i32,
                     },
                 ],
             ),
@@ -811,11 +822,13 @@ mod tests {
                         field_name: "field1".to_string(),
                         sort_order: SortOrder::Asc as i32,
                         sort_datetime_format: None,
+                        missing: SortMissing::Last as i32,
                     },
                     SortField {
                         field_name: "field2".to_string(),
                         sort_order: SortOrder::Desc as i32,
                         sort_datetime_format: None,
+                        missing: SortMissing::Last as i32,
                     },
                 ],
             ),
@@ -850,6 +863,7 @@ mod tests {
                 field_name: "fiel1".to_string(),
                 sort_order: SortOrder::Desc as i32,
                 sort_datetime_format: None,
+                missing: SortMissing::Last as i32,
             }],
         );
     }
