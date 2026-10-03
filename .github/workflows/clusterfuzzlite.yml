@@ -1,0 +1,46 @@
+name: ClusterFuzzLite
+on:
+  push:
+    branches: [main]
+    paths:
+      - "quickwit/**"
+      - "!quickwit/quickwit-ui/**"
+      - ".clusterfuzzlite/**"
+      - ".github/workflows/clusterfuzzlite*.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "quickwit/**"
+      - "!quickwit/quickwit-ui/**"
+      - ".clusterfuzzlite/**"
+      - ".github/workflows/clusterfuzzlite*.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  fuzzing:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.workflow }}-${{ matrix.sanitizer }}-${{ github.ref }}
+      cancel-in-progress: true
+    permissions:
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [address]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Fuzzers (${{ matrix.sanitizer }})
+        uses: google/clusterfuzzlite/actions/build_fuzzers@v1
+        with:
+          language: rust
+          sanitizer: ${{ matrix.sanitizer }}
+      - name: Run Fuzzers (${{ matrix.sanitizer }})
+        uses: google/clusterfuzzlite/actions/run_fuzzers@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fuzz-seconds: 30
+          mode: 'code-change'
+          sanitizer: ${{ matrix.sanitizer }}
