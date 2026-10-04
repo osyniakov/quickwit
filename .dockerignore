@@ -9,5 +9,9 @@
 docs
 examples
 !.git/
+!.clusterfuzzlite/
+# The fuzz seed corpora are build inputs for .clusterfuzzlite/build.sh, and some of
+# them are .txt files that the patterns above would otherwise drop.
+!quickwit/fuzz/seeds/**
 !quickwit-ui/build/.gitignore
 !quickwit-ui/.gitignore_for_build_directory

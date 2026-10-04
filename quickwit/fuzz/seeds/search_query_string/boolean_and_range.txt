@@ -1,0 +1,1 @@
+(body:quick AND NOT severity:DEBUG) OR count:[1 TO 100}

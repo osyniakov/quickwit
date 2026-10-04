@@ -1,0 +1,1 @@
+{"timestamp":1705314600,"body":"a document whose extra fields exercise the dynamic mapping","unmapped_string":"free form","unmapped_nested":{"a":{"b":[1,2,{"c":null}]}},"unmapped_number":-9223372036854775808,"host_ip":"::ffff:127.0.0.1"}

@@ -1,0 +1,50 @@
+{
+  "resource_logs": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": { "value": { "StringValue": "quickwit-fuzz" } }
+          }
+        ],
+        "dropped_attributes_count": 0
+      },
+      "scope_logs": [
+        {
+          "scope": {
+            "name": "fuzz",
+            "version": "0.1.0",
+            "attributes": [],
+            "dropped_attributes_count": 0
+          },
+          "log_records": [
+            {
+              "time_unix_nano": 1700000000000000000,
+              "observed_time_unix_nano": 1700000000000000001,
+              "severity_number": 9,
+              "severity_text": "INFO",
+              "body": { "value": { "StringValue": "hello from the fuzz corpus" } },
+              "attributes": [
+                {
+                  "key": "http.status_code",
+                  "value": { "value": { "IntValue": 200 } }
+                },
+                {
+                  "key": "http.duration_ms",
+                  "value": { "value": { "DoubleValue": 12.5 } }
+                }
+              ],
+              "dropped_attributes_count": 0,
+              "flags": 0,
+              "trace_id": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+              "span_id": [1, 2, 3, 4, 5, 6, 7, 8]
+            }
+          ],
+          "schema_url": ""
+        }
+      ],
+      "schema_url": ""
+    }
+  ]
+}
