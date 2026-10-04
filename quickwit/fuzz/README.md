@@ -106,8 +106,8 @@ still indexed as sent, so the skew stays visible.
 **2. Panic on a query string of `*` followed by a control character** —
 `search_query_string`, first hit after 170k executions. Minimal reproducer is two
 bytes, `0x2A 0x0C` (`*` then a form feed), i.e.
-`GET /api/v1/{index}/search?query=*%0C`. Fixed upstream; picked up here by moving the
-tantivy pin to `20d7f72f`.
+`GET /api/v1/{index}/search?query=*%0C`. Fixed upstream, and already carried by the
+tantivy revision quickwit pins, so this branch needs no change for it.
 
 `*` parses to `UserInputLeaf::All`, which `set_default_field` rewrites into an
 `Exists` leaf, and a later `set_field(None)` hit an `expect` in
