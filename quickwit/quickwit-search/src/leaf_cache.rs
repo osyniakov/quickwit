@@ -57,6 +57,11 @@ impl CacheKeyHasher {
     }
 }
 
+#[cfg(test)]
+pub(crate) static PROBE_LEAF_PUTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+#[cfg(test)]
+pub(crate) static PROBE_PREDICATE_PUTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// A cache to memoize `leaf_search_single_split` results.
 pub struct LeafSearchCache {
     content: MemorySizedCache<CacheKeyHash>,
@@ -112,6 +117,8 @@ impl LeafSearchCache {
             partial_result_cache_num_docs: split_info.num_docs,
             ..Default::default()
         });
+        #[cfg(test)]
+        PROBE_LEAF_PUTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let key = CacheKey::from_split_meta_and_request(split_info, search_request);
         let encoded_result = result.encode_to_vec();
         self.content
@@ -284,6 +291,8 @@ impl quickwit_query::query_ast::PredicateCache for PredicateCacheImpl {
         segment: SegmentId,
         hits: quickwit_query::query_ast::HitSet,
     ) {
+        #[cfg(test)]
+        PROBE_PREDICATE_PUTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if !self.enabled {
             return;
         }

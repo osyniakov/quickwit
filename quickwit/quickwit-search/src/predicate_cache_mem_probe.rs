@@ -5,7 +5,6 @@
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::net::{Ipv4Addr, SocketAddr};
-use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicIsize, Ordering};
 
@@ -16,6 +15,8 @@ use quickwit_proto::search::SearchRequest;
 use quickwit_query::query_ast::qast_json_helper;
 use quickwit_proto::types::NodeId;
 use serde_json::json;
+use quickwit_metastore::{ListSplitsRequestExt, MetastoreServiceStreamSplitsExt};
+use quickwit_proto::metastore::MetastoreService;
 
 use crate::search_job_placer::SearchJobPlacer;
 use crate::SearchServiceClient;
@@ -45,8 +46,8 @@ unsafe impl GlobalAlloc for CountingAllocator {
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
 
-const NUM_SPLITS: usize = 40;
-const DOCS_PER_SPLIT: usize = 500;
+const NUM_SPLITS: usize = 200;
+const DOCS_PER_SPLIT: usize = 50;
 
 fn env_usize(key: &str, default: usize) -> usize {
     std::env::var(key)
@@ -77,20 +78,34 @@ async fn run_probe(test_sandbox: &TestSandbox, predicate_cache_capacity: ByteSiz
         },
     );
     let metastore = test_sandbox.metastore();
+    let now_ts = tantivy::time::OffsetDateTime::now_utc().unix_timestamp();
 
     let search = |query_id: usize| {
         let request = SearchRequest {
             index_id_patterns: vec![test_sandbox.index_uid().index_id.to_string()],
             // Selective lookups, like trace-id or request-id searches: zero hits per split.
             query_ast: qast_json_helper(&format!("trace_id:missing{query_id}"), &["body"]),
-            start_timestamp: Some(1_000),
-            end_timestamp: Some(1_000_000_000),
+            start_timestamp: Some(now_ts - 1_000_000),
+            end_timestamp: Some(now_ts + 1_000_000),
             max_hits: 10,
             ..Default::default()
         };
         root_search(&searcher_context, request, &metastore, &cluster_client)
     };
 
+    {
+        let request = SearchRequest {
+            index_id_patterns: vec![test_sandbox.index_uid().index_id.to_string()],
+            query_ast: qast_json_helper("log", &["body"]),
+            start_timestamp: Some(now_ts - 1_000_000),
+            end_timestamp: Some(now_ts + 1_000_000),
+            max_hits: 1,
+            ..Default::default()
+        };
+        let response = root_search(&searcher_context, request, &metastore, &cluster_client).await.unwrap();
+        let splits = test_sandbox.metastore().list_splits(quickwit_proto::metastore::ListSplitsRequest::try_from_index_uid(test_sandbox.index_uid()).unwrap()).await.unwrap().collect_splits().await.unwrap();
+        println!("PROBE   sanity: 'log' hits={} num_splits={} first_split_ts={:?}", response.num_hits, splits.len(), splits.first().map(|s| s.split_metadata.time_range.clone()));
+    }
     // Warm the footer cache and other one-off allocations so they don't count.
     for query_id in 0..50 {
         search(usize::MAX - query_id).await.unwrap();
@@ -99,8 +114,16 @@ async fn run_probe(test_sandbox: &TestSandbox, predicate_cache_capacity: ByteSiz
     for query_id in 0..num_queries {
         let response = search(query_id).await.unwrap();
         assert_eq!(response.num_hits, 0);
+        if query_id < 2 {
+            println!("PROBE   q{query_id}: num_successful_splits={} failed_splits={} first_failure={:?}", response.num_successful_splits, response.failed_splits.len(), response.failed_splits.first().map(|f| f.error.clone()));
+        }
     }
     let heap_after = LIVE_HEAP_BYTES.load(Ordering::Relaxed);
+    println!(
+        "PROBE   puts so far: leaf_cache={} predicate_cache={}",
+        crate::leaf_cache::PROBE_LEAF_PUTS.load(Ordering::Relaxed),
+        crate::leaf_cache::PROBE_PREDICATE_PUTS.load(Ordering::Relaxed)
+    );
     heap_after - heap_before
 }
 
@@ -122,16 +145,18 @@ async fn probe_predicate_cache_memory() -> anyhow::Result<()> {
             mode: lenient
         "#;
     let test_sandbox =
-        TestSandbox::create("probe-6892", doc_mapping_yaml, "{}", &["body"]).await?;
+        TestSandbox::create("probe-6892", doc_mapping_yaml, r#"{"merge_policy": {"type": "no_merge"}}"#, &["body"]).await?;
+    let base_ts = tantivy::time::OffsetDateTime::now_utc().unix_timestamp();
     for split_ord in 0..NUM_SPLITS {
-        let docs = (0..DOCS_PER_SPLIT).map(|doc_ord| {
+        let docs: Vec<_> = (0..DOCS_PER_SPLIT).map(|doc_ord| {
             json!({
                 "body": format!("log line {doc_ord}"),
                 "trace_id": format!("t{split_ord}-{doc_ord}"),
-                "ts": 10_000 + split_ord * 1_000 + doc_ord,
+                "ts": base_ts - 100_000 + (split_ord * 1_000 + doc_ord) as i64,
             })
-        });
-        test_sandbox.add_documents(docs).await?;
+        }).collect();
+        let stats = test_sandbox.add_documents(docs).await?;
+        if split_ord == 0 { println!("PROBE   indexing stats: {stats:?}"); }
     }
     let num_entries = num_queries * NUM_SPLITS;
     // Accounted payload of one entry: 32-byte segment id + 4-byte empty HitSet.
