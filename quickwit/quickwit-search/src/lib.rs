@@ -45,6 +45,8 @@ mod search_permit_provider;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod predicate_cache_mem_probe;
 
 pub use collector::QuickwitAggregations;
 use quickwit_common::thread_pool::with_priority::ThreadPoolWithPriority;
