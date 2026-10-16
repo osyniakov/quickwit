@@ -1,0 +1,1 @@
+body:"quick brown fo"* AND attributes.level:* AND severity:IN [INFO WARN]

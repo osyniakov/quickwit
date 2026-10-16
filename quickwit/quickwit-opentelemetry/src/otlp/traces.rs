@@ -18,6 +18,7 @@ use std::str::FromStr;
 
 use async_trait::async_trait;
 use prost::Message;
+use quickwit_common::rate_limited_warn;
 use quickwit_common::thread_pool::run_cpu_intensive;
 use quickwit_common::uri::Uri;
 use quickwit_config::{ConfigFormat, IndexConfig, load_index_config_from_user_config};
@@ -267,7 +268,20 @@ impl Span {
         };
         let span_fingerprint =
             SpanFingerprint::new(&resource.service_name, span.kind.into(), &span_name);
-        let span_duration_nanos = span.end_time_unix_nano - span.start_time_unix_nano;
+        // Clock skew on the sending host can produce a span that ends before it starts.
+        // Clamp rather than reject: `parse_otlp_spans` propagates the first error, so
+        // failing here would discard every other span in the same export batch.
+        let span_duration_nanos = if span.end_time_unix_nano >= span.start_time_unix_nano {
+            span.end_time_unix_nano - span.start_time_unix_nano
+        } else {
+            rate_limited_warn!(
+                limit_per_min = 10,
+                start_timestamp_nanos = span.start_time_unix_nano,
+                end_timestamp_nanos = span.end_time_unix_nano,
+                "span ends before it starts, recording a zero duration"
+            );
+            0
+        };
         let span_duration_millis = Some(span_duration_nanos / 1_000_000);
         let span_attributes = extract_attributes(span.attributes);
 
@@ -1150,6 +1164,35 @@ mod tests {
             );
             assert_eq!(span.span_dropped_links_count, 5);
         }
+    }
+
+    #[test]
+    fn test_span_from_otlp_clamps_inverted_duration() {
+        // Subtracting the timestamps directly underflows when a span ends before it
+        // starts: a panic under debug assertions, and a ~584-year duration otherwise.
+        let otlp_span = OtlpSpan {
+            trace_id: vec![1; 16],
+            span_id: vec![2; 8],
+            parent_span_id: Vec::new(),
+            trace_state: "".to_string(),
+            name: "inverted".to_string(),
+            kind: 2, // Server
+            start_time_unix_nano: 1_001_000_002,
+            end_time_unix_nano: 1_000_000_001,
+            attributes: Vec::new(),
+            dropped_attributes_count: 0,
+            events: Vec::new(),
+            dropped_events_count: 0,
+            links: Vec::new(),
+            dropped_links_count: 0,
+            status: None,
+        };
+        let span = Span::from_otlp(otlp_span, &Resource::default(), &Scope::default()).unwrap();
+
+        assert_eq!(span.span_duration_millis, Some(0));
+        // The timestamps are reported as received, so the anomaly stays visible.
+        assert_eq!(span.span_start_timestamp_nanos, 1_001_000_002);
+        assert_eq!(span.span_end_timestamp_nanos, 1_000_000_001);
     }
 
     #[test]

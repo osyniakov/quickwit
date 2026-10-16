@@ -1,0 +1,5 @@
+{
+  "match_phrase_prefix": {
+    "body": { "query": "quick brown fo", "max_expansions": 50, "slop": 0 }
+  }
+}

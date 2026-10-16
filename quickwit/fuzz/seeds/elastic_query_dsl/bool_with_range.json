@@ -1,0 +1,13 @@
+{
+  "bool": {
+    "must": [
+      { "match": { "body": "quick brown fox" } },
+      { "range": { "count": { "gte": 1, "lt": 100 } } }
+    ],
+    "should": [{ "term": { "severity": { "value": "INFO" } } }],
+    "must_not": [{ "exists": { "field": "host_ip" } }],
+    "filter": [{ "match_phrase": { "body": { "query": "lazy dog", "slop": 1 } } }],
+    "minimum_should_match": 1,
+    "boost": 1.5
+  }
+}
