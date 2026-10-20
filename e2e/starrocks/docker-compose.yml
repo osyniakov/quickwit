@@ -6,7 +6,7 @@ networks:
 
 services:
   quickwit:
-    image: quickwit/quickwit:${QW_VERSION:-0.8.0}
+    image: quickwit/quickwit:${QW_VERSION:-0.9.1}
     container_name: qw_starrocks_qw
     command: ["run"]
     environment:

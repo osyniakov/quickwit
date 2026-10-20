@@ -4,16 +4,47 @@
 (`type = "es"`) can read indices stored in Quickwit, with Quickwit acting
 as a drop-in Elasticsearch endpoint.
 
-**Date.** 2026-04-26.
-**Quickwit images probed.** `quickwit/quickwit:0.8.0` (the published
-release) and `quickwit/quickwit:edge` (built from `main`). Differences
-between the two are called out per gap.
+**Revision history.**
+
+| Date       | Quickwit under test | What changed |
+| ---------- | ------------------- | ------------ |
+| 2026-04-26 | `0.8.0` image, `edge` image (`main` @ `d27d240`) | Initial report; full stack run incl. StarRocks FE. |
+| 2026-10-20 | `main` @ `d140cfc` (0.9.1 + 311 commits), built from source | Re-evaluated every gap against current `main`. Gaps 4, 5 and 7 are closed; Gap 6 root cause corrected; Gaps 1–3 still open. |
+
 **StarRocks image.** `starrocks/allin1-ubuntu:3.3-latest`.
 
 The e2e harness lives in `e2e/starrocks/`. Run with `bash run.sh` from
-that directory; results land in `artifacts/run.log`.
+that directory; results land in `artifacts/run.log`. A shim-less probe of
+the raw Quickwit wire format is in `scripts/probe_direct.sh`.
 
 ---
+
+## 0. What changed since the 2026-04-26 run
+
+- **Quickwit 0.9.0 / 0.9.1 shipped** and includes #6168 (the ES endpoints
+  for Trino/StarRocks-style connectors). Gap 7 is closed for anyone on a
+  current GA release; `QW_VERSION=0.9.1` is the recommended GA target.
+- **Gap 4 (`_cat/indices?s=…`) and Gap 5 (`_aliases`) are closed.** Both
+  were fixed by #6168 and return 200 on current `main`; the first report
+  had already noted this for `edge`, but listed them as open gaps.
+- **Gap 6 root cause corrected.** The `DELETE /_search/scroll` handler
+  *does* exist and is registered; it is shadowed by the scroll handler
+  that precedes it (see §4). Verified with a local patch.
+- **`_mapping` now accepts query parameters** (#6443,
+  `IndexMappingQueryParams`: `fields`/`field_patterns`,
+  `start_timestamp`, `end_timestamp`). Unknown parameters are ignored, so
+  StarRocks's plain `GET /<index>/_mapping` is unaffected. The response
+  shape is unchanged.
+- **New `tie_breaker` field type** (#6859, #6882) is exposed in `_mapping`
+  as `long`, so it appears in StarRocks as a `BIGINT` column. Opt-in only;
+  no impact on existing indexes.
+- **MCP endpoint moved to the root path `/mcp`** (#6863). Not used by
+  StarRocks, but it is the first REST surface served outside `/api/v1`,
+  which is a useful precedent for Gap 1.
+- `track_total_hits` in the URL is now parsed correctly (`true`, `false`,
+  integers). Not sent by StarRocks's scan path.
+
+No change on `main` regressed any endpoint StarRocks depends on.
 
 ## 1. Architecture of the test
 
@@ -26,9 +57,9 @@ that directory; results land in `artifacts/run.log`.
 +-------------------+        +--------------------+        +--------------+
 ```
 
-The shim is a ~110-line stdlib Python proxy
-(`proxy/es_compat_proxy.py`). It exists because two classes of
-incompatibility prevent StarRocks from talking to Quickwit directly:
+The shim is a small stdlib Python proxy (`proxy/es_compat_proxy.py`). It
+exists because two classes of incompatibility prevent StarRocks from
+talking to Quickwit directly:
 
 1. **Path prefix.** Quickwit hosts every ES-compatible endpoint under
    `/api/v1/_elastic/...`, so a vanilla ES client requesting
@@ -36,70 +67,117 @@ incompatibility prevent StarRocks from talking to Quickwit directly:
 2. **Response shape.** Two endpoints are missing fields the StarRocks
    parser dereferences without null-checks (see §3).
 
-Once the upstream gaps are closed, the body-rewrite paths can be
-removed; only the path prefix would still need rewriting (and even that
-goes away if Quickwit gains an alias mount).
+Both are still required on current `main`.
 
-## 2. End-to-end results (canonical run)
+## 2. End-to-end results
+
+### 2.1 Canonical stack run (2026-04-26, unchanged)
 
 | Phase                                       | Result | Notes |
 | ------------------------------------------- | :----: | ----- |
-| Boot Quickwit + shim + StarRocks FE         | ✅ | StarRocks BE crashes-loops in the sandbox (see §4). |
+| Boot Quickwit + shim + StarRocks FE         | ✅ | StarRocks BE crash-loops in the sandbox (see §5). |
 | Create `events` index in Quickwit           | ✅ | Native REST, not via ES API. |
-| Bulk-ingest 10 docs through `_bulk`         | ✅ | Took ~1 s; quickly visible after commit. |
+| Bulk-ingest 10 docs through `_bulk`         | ✅ | |
 | Sanity search via Quickwit's native ES route | ✅ | Returns 10 hits. |
 | Probe ES surface via the shim               | ✅ (with shim) | See §3. |
-| `CREATE EXTERNAL CATALOG qw_es … type='es'` | ✅ | StarRocks accepts it; auto-mounts `default_db`. |
-| `SHOW DATABASES`, `SHOW TABLES`             | ✅ | StarRocks lists all Quickwit indices, including the `otel-*` system ones. |
-| `DESC events`                               | ✅ | Returns all six columns with the correct types: `level/service/message → VARCHAR`, `ts → DATETIME`, `latency_ms → DOUBLE`, `status → BIGINT`. |
-| `SELECT COUNT(*) FROM events`               | ❌ in this sandbox | Fails with `No Alive backends or compute nodes` because the BE never starts (host nofile limit cap, see §4). On any host with `ulimit -n ≥ 60000`, the SELECT path uses `_search?scroll=…` and `_search/scroll`, both already 200-OK in Quickwit. |
-| Predicate / aggregate queries               | ❌ same reason | Same root cause as above. |
+| `CREATE EXTERNAL CATALOG qw_es … type='es'` | ✅ | |
+| `SHOW DATABASES`, `SHOW TABLES`             | ✅ | Lists all Quickwit indices, including the `otel-*` system ones. |
+| `DESC events`                               | ✅ | `level/service/message → VARCHAR`, `ts → DATETIME`, `latency_ms → DOUBLE`, `status → BIGINT`. |
+| `SELECT COUNT(*) FROM events`               | ❌ in sandbox | `No Alive backends or compute nodes` — BE never starts (nofile limit, §5). |
+| Predicate / aggregate queries               | ❌ in sandbox | Same root cause. |
 
-**Bottom line.** Metadata flow (catalog → database → table → schema) is
-fully working with the shim. Data plane (`SELECT`) is unverified in this
-environment but every endpoint it depends on returns 200 with the shim
-in place.
+### 2.2 Re-run against `main` @ `d140cfc` (2026-10-20)
+
+Docker Hub returned `429 Too Many Requests` for both the Quickwit and
+StarRocks images from this environment, so the full stack could not be
+brought up. Instead, Quickwit was built from the merged source
+(`cargo build -p quickwit-cli`), run as a single node, loaded with the
+same `events` index and NDJSON sample, and probed directly with
+`scripts/probe_direct.sh` (no shim). This exercises exactly the HTTP
+surface StarRocks's `EsRestClient` / `EsScanReader` touch; the StarRocks
+side of the contract is unchanged since the first run.
+
+| Request (as StarRocks sends it) | At `/` | At `/api/v1/_elastic` | Body OK for StarRocks? |
+| ------------------------------- | :----: | :-------------------: | ---------------------- |
+| `GET /`                          | 301 | 200 | ✅ |
+| `GET /_nodes/http`               | 404 | 200 | ❌ no `nodes[*].version` (Gap 3) |
+| `GET /_cat/indices?h=index&format=json&s=index:asc` | 404 | 200 | ✅ |
+| `GET /_aliases`                  | 404 | 200 (`{}`) | ✅ |
+| `GET /events/_mapping`           | 404 | 200 | ✅ six fields, correct ES types |
+| `GET /events/_search_shards`     | 404 | 200 | ❌ no `state`, no `nodes` map (Gap 2) |
+| `POST /events/_search?scroll=1m&preference=_shards:0` | 404 | 200 | ✅ returns `_scroll_id`, `hits.total = 10` |
+| `POST /_search/scroll`           | 404 | 200 | ✅ |
+| `DELETE /_search/scroll`         | 404 | **405** | ⚠️ tolerated by StarRocks (Gap 6) |
+
+Actual bodies of the two endpoints that still break StarRocks:
+
+```json
+GET /api/v1/_elastic/_nodes/http
+{"nodes":{"qw-node-1":{"http":{"publish_address":"127.0.0.1:7280"},"roles":["data","ingest"]}}}
+
+GET /api/v1/_elastic/events/_search_shards
+{"shards":[[{"index":"events","node":"qw-node-1","primary":true,"shard":0}]]}
+```
+
+**Bottom line.** Unchanged from April: with the shim, the metadata flow
+(catalog → database → table → schema) works and every data-plane
+endpoint returns 200. Without the shim, StarRocks cannot connect at all
+(Gap 1), and with only path rewriting it fails on `_nodes/http` and
+`_search_shards` (Gaps 2, 3).
 
 ## 3. Endpoint-by-endpoint compatibility
 
-What StarRocks's `EsRestClient` and `EsScanReader` call, against what
-Quickwit ships today.
+| Endpoint StarRocks calls              | Quickwit `0.8.0`                 | Quickwit `0.9.x` / `main` @ `d140cfc` | After shim |
+| ------------------------------------- | -------------------------------- | -------------------------------------- | :--------: |
+| `GET /`                               | 200, but at `/api/v1/_elastic`   | same                                   | ✅ |
+| `GET /_nodes/http`                    | 404 (handler not registered)     | 200, missing `nodes[*].version`        | ✅ (shim injects `version: "7.10.2"`) |
+| `GET /_cat/indices?h=…&format=json&s=index:asc` | 400 — `s` rejected     | 200                                    | ✅ |
+| `GET /_aliases`                       | 400 — parsed as index pattern    | 200 (`{}`)                             | ✅ |
+| `GET /<index>/_mapping`               | 404 (handler not registered)     | 200                                    | ✅ |
+| `GET /<index>/_search_shards`         | 404 (handler not registered)     | 200, missing `state` and `nodes` map   | ✅ (shim injects them) |
+| `POST /<index>/_search?scroll=…`      | 200                              | 200                                    | ✅ |
+| `POST /_search/scroll`                | 200                              | 200                                    | ✅ |
+| `DELETE /_search/scroll`              | 405                              | 405 (handler shadowed)                 | ⚠️ tolerated; scrolls expire on TTL |
 
-| Endpoint StarRocks calls              | Quickwit (`0.8.0`)              | Quickwit (`edge`)                | After shim |
-| ------------------------------------- | ------------------------------- | -------------------------------- | :--------: |
-| `GET /`                               | 200, but at `/api/v1/_elastic`  | same                             | ✅ |
-| `GET /_nodes/http`                    | 404 (handler not registered)    | 200, but missing `nodes[*].version` | ✅ (shim injects `version: "7.10.2"`) |
-| `GET /_cat/indices?h=...&format=json&s=...` | 400 — `s` parameter rejected | 200                            | ✅ |
-| `GET /_aliases`                       | 400 — treats `_aliases` as an index pattern | 200 (`{}`)                  | ✅ |
-| `GET /<index>/_mapping`               | 404 (handler not registered)    | 200                              | ✅ |
-| `GET /<index>/_search_shards`         | 404 (handler not registered)    | 200, but missing `state` and the `nodes` map | ✅ (shim injects `"state":"STARTED"`, `nodes.<id>.attributes/version`) |
-| `POST /<index>/_search?scroll=…`      | 200                             | 200                              | ✅ |
-| `POST /_search/scroll`                | 200                             | 200                              | ✅ |
-| `DELETE /_search/scroll`              | 405 — `DELETE` not bound        | 405 — same                       | ⚠️ tolerated by StarRocks (it ignores cleanup failures); scrolls just expire on Quickwit's TTL. |
+## 4. Gaps in Quickwit
 
-## 4. Identified gaps in Quickwit (with proposed fixes)
+Status summary:
 
-### Gap 1 — All ES-compatible routes live under `/api/v1/_elastic/`
+| # | Gap | Severity | Status on `main` @ `d140cfc` |
+| - | --- | -------- | ---------------------------- |
+| 1 | ES routes only under `/api/v1/_elastic/` | high | **Open** |
+| 2 | `_search_shards` omits `state` and `nodes` | high | **Open** |
+| 3 | `_nodes/http` omits `version` | high | **Open** |
+| 4 | `_cat/indices` rejects `s` | medium | ✅ Closed (fixed in 0.9.0, #6168) |
+| 5 | `_aliases` parsed as index pattern | medium-low | ✅ Closed (fixed in 0.9.0, #6168) |
+| 6 | `DELETE /_search/scroll` returns 405 | low | **Open** — root cause corrected below |
+| 7 | GA release lacks the ES handlers | — | ✅ Closed (0.9.0 / 0.9.1 ship #6168) |
+
+### Gap 1 — All ES-compatible routes live under `/api/v1/_elastic/` (open)
 
 > Severity: high. Affects every standard ES client, not just StarRocks.
 
-Source of truth: `quickwit/quickwit-serve/src/rest.rs:293`.
+Source: `quickwit/quickwit-serve/src/rest.rs` — `api_v1_routes()` mounts
+`elastic_api_handlers(...)` only under `warp::path!("api" / "v1" / ..)`.
+On current `main`, `GET /` returns 301 and every other ES path at the
+root returns 404.
 
-The `/api/v1` mount is conventional for the rest of Quickwit's REST
-API, but it's not what real ES emits. Existing ES clients (StarRocks,
-Trino, Logstash output, Vector ES sink, etc.) hard-code the
-`elasticsearch` URL pattern and won't accept a custom prefix.
+Existing ES clients (StarRocks, Trino, Logstash output, Vector ES sink,
+etc.) hard-code the Elasticsearch URL layout and won't accept a custom
+prefix.
 
-**Recommended fix.** Mount the ES-compat router at the root path *in
-addition to* under `/api/v1/_elastic/`. Either by serving the same
-filter at both prefixes, or via a configurable `rest_config.es_path` knob
-defaulting to `/`.
+**Recommended fix.** Additionally mount the ES-compat router at the root
+path, gated by a config knob (e.g. `rest.es_compat_root_mount: bool`,
+default `false` to avoid shadowing the UI redirect at `/`). `/mcp` (#6863)
+already establishes a precedent for serving a REST surface outside
+`/api/v1`.
 
-### Gap 2 — `GET /_search_shards` omits `state` and the top-level `nodes` map
+### Gap 2 — `GET /_search_shards` omits `state` and the `nodes` map (open)
 
 > Severity: high. Blocks `DESC <table>` and `SELECT *` in StarRocks.
 
-Source: `quickwit/quickwit-serve/src/elasticsearch_api/rest_handler.rs:140-149`.
+Source: `quickwit/quickwit-serve/src/elasticsearch_api/rest_handler.rs`,
+`es_compat_search_shards()` (unchanged since April):
 
 ```rust
 pub(crate) fn es_compat_search_shards(index_id: String, config: Arc<NodeConfig>) -> Value {
@@ -114,12 +192,12 @@ pub(crate) fn es_compat_search_shards(index_id: String, config: Arc<NodeConfig>)
 }
 ```
 
-StarRocks's parser unconditionally reads
-`shard.getString("state")` (`EsShardPartitions.java:90`) and
+StarRocks's parser unconditionally reads `shard.getString("state")`
+(`EsShardPartitions.java:90`) and
 `nodes.getJSONObject(node_id).getJSONObject("attributes")`
 (`EsShardRouting.java:47`).
 
-**Recommended fix** (≈10 lines):
+**Recommended fix** (≈15 lines):
 
 ```rust
 pub(crate) fn es_compat_search_shards(index_id: String, config: Arc<NodeConfig>) -> Value {
@@ -152,94 +230,91 @@ pub(crate) fn es_compat_search_shards(index_id: String, config: Arc<NodeConfig>)
 }
 ```
 
-### Gap 3 — `GET /_nodes/http` omits `nodes[*].version`
+### Gap 3 — `GET /_nodes/http` omits `nodes[*].version` (open)
 
 > Severity: high. Triggers a `NullPointerException` in
 > `EsMajorVersion.parse` even when `es.nodes.wan.only=true`.
 
-Source: `quickwit/quickwit-serve/src/elasticsearch_api/rest_handler.rs:111-126`.
+Source: `rest_handler.rs`, `es_compat_nodes_info()` (unchanged). The
+same `version` string proposed in Gap 2 should be added here; ideally
+both reuse the version string already reported by `GET /`
+(`es_compat_cluster_info`) so the three endpoints stay consistent.
 
-The same `version` string proposed in Gap 2 should be added here.
+### Gap 4 — `_cat/indices` rejects `s` (closed)
 
-### Gap 4 — `_cat/indices` rejects `s` query parameter
+Fixed in 0.9.0 (#6168). `CatIndexQueryParams::validate()` in
+`model/cat_indices.rs` now accepts `s=index` and `s=index:asc`, which is
+what StarRocks sends; other sort keys are still rejected with 400.
+Verified 200 on `main`.
 
-> Severity: medium. StarRocks calls
-> `_cat/indices?h=index&format=json&s=index:asc`. The `s` parameter is
-> a sort hint; treating it as an error is stricter than ES.
+### Gap 5 — `GET /_aliases` parsed as an index pattern (closed)
 
-Source: `quickwit/quickwit-serve/src/elasticsearch_api/model/cat_indices.rs:75`.
+Fixed in 0.9.0 (#6168). `_aliases` has its own route and returns `{}`.
+Verified 200 on `main`.
 
-**Recommended fix.** Either silently ignore unknown `_cat` parameters
-or honor `s` (sort by column).
+### Gap 6 — `DELETE /_search/scroll` returns 405 (open, root cause corrected)
 
-### Gap 5 — `GET /_aliases` is parsed as an index pattern
+> Severity: low. StarRocks calls this to release scroll contexts but
+> ignores failures; scrolls expire on Quickwit's TTL.
 
-> Severity: medium-low. The route `/_elastic/_aliases` exists but the
-> registration order causes the request to hit
-> `elastic_index_mapping_filter` first, which validates `_aliases` as
-> an index ID and returns 400.
+The April report stated the handler was a stub. That is wrong: a no-op
+`es_compat_delete_scroll_handler` returning
+`{"succeeded": true, "num_freed": 0}` exists and is registered in
+`elasticsearch_api/mod.rs`. It is never reached because the preceding
+`es_compat_scroll_handler` (`rest_handler.rs`) ends in
+`.recover(recover_fn)`. The scroll filter matches the path
+`_elastic/_search/scroll`, rejects `DELETE` with `MethodNotAllowed`, and
+`recover_fn` converts that rejection into a final 405 *response*, so
+warp's `.or()` chain never tries the next handler.
 
-Source: `quickwit/quickwit-serve/src/elasticsearch_api/mod.rs:106-108`.
+Verification on `main`: swapping the registration order makes `DELETE`
+return 200 with the expected body, but then `GET`/`POST` on the same
+path return 405 — the shadowing is symmetric. Reordering alone is
+therefore **not** a fix.
 
-**Recommended fix.** Move `es_compat_aliases_handler` ahead of the
-catch-all index handlers, or tighten the `index ID pattern` regex to
-exclude reserved `_*` prefixes.
+**Recommended fix.** Either drop the per-handler `.recover(recover_fn)`
+from `es_compat_scroll_handler` and `es_compat_delete_scroll_handler`
+(the router already applies `.recover(recover_fn)` at the end of
+`elastic_api_handlers`), or fold both methods into one filter on
+`_elastic/_search/scroll` that dispatches on method. The same
+per-handler `recover` pattern may shadow other same-path/different-method
+pairs and is worth auditing.
 
-### Gap 6 — `DELETE /_search/scroll` not implemented
+### Gap 7 — GA release lacks the ES handlers (closed)
 
-> Severity: low. StarRocks calls this to release scroll contexts, but
-> ignores failures. Quickwit currently returns 405. Adding a no-op
-> handler that returns `{"succeeded": true, "num_freed": 0}` would
-> stop logspam in the client.
+Quickwit 0.9.0 (and the 0.9.1 security patch) ship #6168. Anyone on a
+current GA release sees the same endpoint surface as `main`. Only
+deployments still on `0.8.x` are affected.
 
-Source: `quickwit/quickwit-serve/src/elasticsearch_api/filter.rs:278-281`
-(filter exists but is a `DELETE` only stub).
+## 5. Environment limitations
 
-### Gap 7 — Quickwit `0.8.0` lacks several ES handlers entirely
+**StarRocks BE (both runs).** The BE refuses to start unless the
+open-files soft limit is ≥ 60000 (`storage_engine.cpp:420`). The April
+sandbox capped the hard limit at 4096; the October environment caps it
+at 20000. On any host with `ulimit -n ≥ 60000` (the AllInOne README's
+documented prerequisite) the BE comes up; the compose file keeps the
+`ulimits.nofile` directive so it works there.
 
-In addition to wire-format gaps, the released image is missing the
-handlers added by PR #6168 (Mar 2026). Specifically `_nodes/http`,
-`<index>/_mapping`, `<index>/_search_shards`, and `_aliases` are 404.
-This is implicit in §3 but worth highlighting: anyone evaluating
-StarRocks against the current GA Quickwit will see a much shorter list
-of working endpoints. The gap closes once a release containing #6168
-ships.
-
-## 5. Sandbox limitation that blocked the data-plane test
-
-The StarRocks BE refuses to start unless the open-files soft limit is
-≥60000 (`storage_engine.cpp:420`):
-
-```
-File descriptor number is less than 60000. Please use (ulimit -n) to set a value equal or greater than 60000
-file descriptors limit is too small
-```
-
-The ulimit can normally be set via the docker-compose `ulimits` block,
-but the sandbox we ran in caps the host's hard limit at 4096 and denies
-`CAP_SYS_RESOURCE`, so the daemon can't grant the bump:
-
-```
-operation not permitted
-error setting rlimit type 7
-```
-
-On any normal Linux host with `ulimit -n ≥ 60000` (the AllInOne
-README's documented prerequisite), the BE comes up and `SELECT`
-queries work the moment the metadata path does. The compose file
-keeps the `ulimits.nofile` directive so it Just Works on hosts that
-allow it.
+**Docker Hub rate limit (October run).** Image pulls returned 429, so
+the October run used a source build of Quickwit instead of the `edge`
+image and could not re-run the StarRocks half. The Quickwit-side
+evidence (§2.2) is sufficient to assess every gap, because none of the
+StarRocks request shapes changed.
 
 ## 6. Recommended follow-up
 
-1. Submit a PR that closes Gaps 2, 3, 4, 5, 6. Each is a localized
-   change in `quickwit-serve/src/elasticsearch_api/`.
-2. Land Gap 1 as a separate config-shaped change (root mount of the
+1. Submit a PR that closes Gaps 2, 3 and 6. All three are localized to
+   `quickwit-serve/src/elasticsearch_api/` (Gap 6 is a one-line removal
+   of `.recover(recover_fn)` on two handlers plus a test that issues
+   `GET`, `POST` and `DELETE` on `_search/scroll`).
+2. Land Gap 1 as a separate, config-gated change (root mount of the
    ES-compat router).
-3. Add a StarRocks-flavored scenario to `quickwit/rest-api-tests/scenarii/`
-   that exercises `_search_shards`, `_nodes/http`, `_cat/indices` with
-   StarRocks-specific parameters, so future regressions are caught
-   before release.
+3. Add a StarRocks-flavored scenario to
+   `quickwit/rest-api-tests/scenarii/es_compatibility/` that asserts the
+   fields StarRocks dereferences (`_nodes/http` → `version`,
+   `_search_shards` → `state` and `nodes.<id>.attributes`) and the
+   `DELETE /_search/scroll` status, so regressions are caught before
+   release.
 
 After (1)+(2), no shim is necessary: a Quickwit binary alone serves
 StarRocks correctly.
@@ -248,12 +323,17 @@ StarRocks correctly.
 
 ```bash
 cd e2e/starrocks
-bash run.sh                # uses QW_VERSION=edge
-# Inspect:
+bash run.sh                       # full stack, QW_VERSION=edge by default
+QW_VERSION=0.9.1 bash run.sh      # against the current GA image
 less artifacts/run.log
-# Or run the probe by itself against a stood-up stack:
-bash scripts/probe_es_api.sh
+
+# Shim-less probe of the raw Quickwit wire format (any running Quickwit
+# with the `events` index loaded):
+QW=http://127.0.0.1:7280 bash scripts/probe_direct.sh
 ```
 
-To test against the released image instead, override:
-`QW_VERSION=0.8.0 bash run.sh`.
+To reproduce the October run without Docker: build with
+`cargo build -p quickwit-cli --bin quickwit` (needs `protoc`), start
+`quickwit run` with a node config whose `data_dir` exists, create the
+index from `quickwit/index_config.yaml`, ingest `data/events.ndjson` via
+`/api/v1/_elastic/_bulk?refresh=true`, then run `probe_direct.sh`.

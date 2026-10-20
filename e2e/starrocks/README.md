@@ -15,7 +15,7 @@ nginx/                  Legacy nginx-only translator (kept for reference;
 quickwit/               Index config used to create the `events` index.
 data/                   NDJSON sample for `_bulk` ingestion.
 starrocks/              SQL: catalog creation + analytical queries.
-scripts/                Standalone ES-endpoint probe.
+scripts/                ES-endpoint probes (via shim, and direct/shim-less).
 run.sh                  Drives the full e2e flow.
 artifacts/              Output of run.sh (gitignored).
 ```
@@ -24,7 +24,7 @@ artifacts/              Output of run.sh (gitignored).
 
 ```bash
 bash run.sh                        # uses QW_VERSION=edge
-QW_VERSION=0.8.0 bash run.sh       # against the published GA image
+QW_VERSION=0.9.1 bash run.sh       # against the current GA image
 ```
 
 `run.sh` brings up the stack, creates the index, ingests sample docs,
