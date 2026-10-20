@@ -16,14 +16,14 @@ use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
 use bytesize::ByteSize;
-use quickwit_cluster::{Cluster, ListenerHandle};
+use quickwit_cluster::{Cluster, GenerationId, ListenerHandle};
 use quickwit_common::pubsub::{Event, EventBroker};
 use quickwit_common::shared_consts::INGESTER_CAPACITY_SCORE_PREFIX;
 use quickwit_proto::ingest::ingester::IngesterStatus;
 use quickwit_proto::types::{NodeId, SourceUid};
 use serde::{Deserialize, Serialize};
 use tokio::task::JoinHandle;
-use tracing::{info, warn};
+use tracing::{info, instrument, warn};
 
 use super::{BROADCAST_INTERVAL_PERIOD, make_key, parse_key};
 use crate::OpenShardCounts;
@@ -40,15 +40,19 @@ pub struct IngesterCapacityScore {
 pub struct BroadcastIngesterCapacityScoreTask {
     cluster: Cluster,
     weak_state: WeakIngesterState,
+    /// Sources broadcast on the previous tick. Carried across iterations so we
+    /// can detect sources that disappeared and clear their Chitchat keys.
+    previous_sources: BTreeSet<SourceUid>,
 }
 
 impl BroadcastIngesterCapacityScoreTask {
     pub fn spawn(cluster: Cluster, weak_state: WeakIngesterState) -> JoinHandle<()> {
-        let mut broadcaster = Self {
+        let broadcaster = Self {
             cluster,
             weak_state,
+            previous_sources: BTreeSet::new(),
         };
-        tokio::spawn(async move { broadcaster.run().await })
+        tokio::spawn(broadcaster.run())
     }
 
     async fn snapshot(&self) -> Result<Option<(usize, OpenShardCounts)>> {
@@ -64,7 +68,7 @@ impl BroadcastIngesterCapacityScoreTask {
         }
 
         let mut guard = state
-            .lock_fully()
+            .lock_fully("broadcast_capacity_score")
             .await
             .context("failed to acquire ingester state lock")?;
 
@@ -79,26 +83,34 @@ impl BroadcastIngesterCapacityScoreTask {
         Ok(Some((capacity_score, open_shard_counts)))
     }
 
-    async fn run(&mut self) {
+    async fn run(mut self) {
         let mut interval = tokio::time::interval(BROADCAST_INTERVAL_PERIOD);
-        let mut previous_sources: BTreeSet<SourceUid> = BTreeSet::new();
 
         loop {
             interval.tick().await;
 
-            let (capacity_score, open_shard_counts) = match self.snapshot().await {
-                Ok(Some(snapshot)) => snapshot,
-                Ok(None) => continue,
-                Err(error) => {
-                    info!("stopping ingester capacity broadcast: {error}");
-                    return;
-                }
-            };
-
-            previous_sources = self
-                .broadcast_capacity(capacity_score, &open_shard_counts, &previous_sources)
-                .await;
+            if !self.run_once().await {
+                return;
+            }
         }
+    }
+
+    /// Single iteration of the capacity-score broadcast loop. Returns `false`
+    /// when the task should stop.
+    #[instrument(name = "broadcast_capacity_score.tick", skip_all)]
+    async fn run_once(&mut self) -> bool {
+        let (capacity_score, open_shard_counts) = match self.snapshot().await {
+            Ok(Some(snapshot)) => snapshot,
+            Ok(None) => return true,
+            Err(error) => {
+                info!("stopping ingester capacity broadcast: {error}");
+                return false;
+            }
+        };
+        self.previous_sources = self
+            .broadcast_capacity(capacity_score, &open_shard_counts, &self.previous_sources)
+            .await;
+        true
     }
 
     async fn broadcast_capacity(
@@ -148,6 +160,7 @@ impl BroadcastIngesterCapacityScoreTask {
 #[derive(Debug, Clone)]
 pub struct IngesterCapacityScoreUpdate {
     pub node_id: NodeId,
+    pub generation_id: GenerationId,
     pub source_uid: SourceUid,
     pub capacity_score: usize,
     pub open_shard_count: usize,
@@ -170,9 +183,11 @@ pub async fn setup_ingester_capacity_update_listener(
                 warn!("failed to parse ingester capacity `{}`", event.value);
                 return;
             };
-            let node_id: NodeId = event.node.node_id.clone().into();
+            let node_id: NodeId = NodeId::from_str(&event.node.node_id);
+            let generation_id: GenerationId = GenerationId::from(event.node.generation_id);
             event_broker.publish(IngesterCapacityScoreUpdate {
                 node_id,
+                generation_id,
                 source_uid,
                 capacity_score: ingester_capacity.capacity_score,
                 open_shard_count: ingester_capacity.open_shard_count,
@@ -186,7 +201,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use quickwit_cluster::{ChannelTransport, create_cluster_for_test};
+    use quickwit_cluster::{ChitchatTransport, create_cluster_for_test};
     use quickwit_proto::types::{IndexUid, ShardId, SourceId};
 
     use super::*;
@@ -195,7 +210,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_snapshot_state_dropped() {
-        let transport = ChannelTransport::default();
+        let transport = ChitchatTransport::default();
         let cluster = create_cluster_for_test(Vec::new(), &["indexer"], &transport, true)
             .await
             .unwrap();
@@ -206,13 +221,14 @@ mod tests {
         let task = BroadcastIngesterCapacityScoreTask {
             cluster,
             weak_state,
+            previous_sources: BTreeSet::new(),
         };
         assert!(task.snapshot().await.is_err());
     }
 
     #[tokio::test]
     async fn test_broadcast_ingester_capacity() {
-        let transport = ChannelTransport::default();
+        let transport = ChitchatTransport::default();
         let cluster = create_cluster_for_test(Vec::new(), &["indexer"], &transport, true)
             .await
             .unwrap();
@@ -222,8 +238,8 @@ mod tests {
         let (_temp_dir, state) =
             IngesterState::for_test_with_disk_capacity(cluster.clone(), ByteSize::b(1000)).await;
         let index_uid = IndexUid::for_test("test-index", 0);
-        let mut state_guard = state.lock_partially().await.unwrap();
-        let shard = IngesterShard::new_solo(
+        let mut state_guard = state.lock_partially("test").await.unwrap();
+        let shard = IngesterShard::builder(
             index_uid.clone(),
             SourceId::from("test-source"),
             ShardId::from(0),
@@ -242,6 +258,7 @@ mod tests {
         let task = BroadcastIngesterCapacityScoreTask {
             cluster: cluster.clone(),
             weak_state: state.weak(),
+            previous_sources: BTreeSet::new(),
         };
 
         let update_counter = Arc::new(AtomicUsize::new(0));
@@ -253,6 +270,7 @@ mod tests {
             assert_eq!(event.source_uid.source_id, "test-source");
             assert_eq!(event.capacity_score, 6);
             assert_eq!(event.open_shard_count, 1);
+            assert_eq!(event.generation_id, GenerationId::from(1u64));
         });
 
         let _listener =
@@ -278,7 +296,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_removed_source_broadcasts_zero_with_ttl() {
-        let transport = ChannelTransport::default();
+        let transport = ChitchatTransport::default();
         let cluster = create_cluster_for_test(Vec::new(), &["indexer"], &transport, true)
             .await
             .unwrap();
@@ -287,6 +305,7 @@ mod tests {
         let task = BroadcastIngesterCapacityScoreTask {
             cluster: cluster.clone(),
             weak_state: state.weak(),
+            previous_sources: BTreeSet::new(),
         };
 
         let index_uid = IndexUid::for_test("test-index", 0);

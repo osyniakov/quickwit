@@ -91,7 +91,11 @@ pub use pulsar_source::{PulsarSource, PulsarSourceFactory};
 #[cfg(feature = "sqs")]
 pub use queue_sources::sqs_queue;
 use quickwit_actors::{Actor, ActorContext, ActorExitStatus, Handler, Mailbox};
-use quickwit_common::metrics::{GaugeGuard, MEMORY_METRICS};
+use quickwit_common::metrics::{
+    IN_FLIGHT_FILE_SOURCE, IN_FLIGHT_INGEST_SOURCE, IN_FLIGHT_KAFKA_SOURCE,
+    IN_FLIGHT_KINESIS_SOURCE, IN_FLIGHT_OTHER_SOURCE, IN_FLIGHT_PUBSUB_SOURCE,
+    IN_FLIGHT_PULSAR_SOURCE,
+};
 use quickwit_common::pubsub::EventBroker;
 use quickwit_common::runtimes::RuntimeType;
 use quickwit_config::{
@@ -100,6 +104,7 @@ use quickwit_config::{
 use quickwit_ingest::IngesterPool;
 use quickwit_metastore::IndexMetadataResponseExt;
 use quickwit_metastore::checkpoint::{SourceCheckpoint, SourceCheckpointDelta};
+use quickwit_metrics::GaugeGuard;
 use quickwit_proto::indexing::IndexingPipelineId;
 use quickwit_proto::metastore::{
     IndexMetadataRequest, MetastoreError, MetastoreResult, MetastoreService,
@@ -116,16 +121,10 @@ pub use void_source::{VoidSource, VoidSourceFactory};
 
 use self::doc_file_reader::dir_and_filename;
 use self::stdin_source::StdinSourceFactory;
-use crate::actors::{DocProcessor, ParquetDocProcessor, Processor};
-use crate::models::RawDocBatch;
+use crate::actors::DocProcessor;
+use crate::models::{RawDocBatch, SharedPublishToken};
 use crate::source::ingest::IngestSourceFactory;
 use crate::source::ingest_api_source::IngestApiSourceFactory;
-
-/// Type alias for SourceContext with ParquetDocProcessor (for metrics pipeline).
-pub type ParquetSourceContext = SourceContext<ParquetDocProcessor>;
-
-/// Type alias for SourceLoader with ParquetDocProcessor (for metrics pipeline).
-pub type ParquetSourceLoader = SourceLoader<ParquetDocProcessor>;
 
 /// Number of bytes after which we cut a new batch.
 ///
@@ -166,6 +165,7 @@ pub struct SourceRuntime {
     pub storage_resolver: StorageResolver,
     pub event_broker: EventBroker,
     pub indexing_setting: IndexingSettings,
+    pub publish_token: SharedPublishToken,
 }
 
 impl SourceRuntime {
@@ -213,9 +213,7 @@ impl SourceRuntime {
     }
 }
 
-pub type SourceContext<P = DocProcessor> = ActorContext<SourceActor<P>>;
-
-pub type LogsSourceContext = SourceContext<DocProcessor>;
+pub type SourceContext = ActorContext<SourceActor>;
 
 /// A Source is a trait that is mounted in a light wrapping Actor called `SourceActor`.
 ///
@@ -241,36 +239,36 @@ pub type LogsSourceContext = SourceContext<DocProcessor>;
 /// }
 /// ```
 #[async_trait]
-pub trait Source<P: Processor = DocProcessor>: Send + 'static {
+pub trait Source: Send + 'static {
     /// This method will be called before any calls to `emit_batches`.
     async fn initialize(
         &mut self,
-        _processor_mailbox: &Mailbox<P>,
-        _ctx: &SourceContext<P>,
+        _doc_processor_mailbox: &Mailbox<DocProcessor>,
+        _ctx: &SourceContext,
     ) -> Result<(), ActorExitStatus> {
         Ok(())
     }
 
     /// Main part of the source implementation, `emit_batches` can emit 0..n batches.
     ///
-    /// The `batch_sink` is a mailbox that has a bounded capacity.
-    /// In that case, `batch_sink` will block.
+    /// The `doc_processor_mailbox` is a mailbox that has a bounded capacity.
+    /// In that case, `doc_processor_mailbox` will block.
     ///
     /// It returns an optional duration specifying how long the batch requester
     /// should wait before polling again.
     async fn emit_batches(
         &mut self,
-        processor_mailbox: &Mailbox<P>,
-        ctx: &SourceContext<P>,
+        doc_processor_mailbox: &Mailbox<DocProcessor>,
+        ctx: &SourceContext,
     ) -> Result<Duration, ActorExitStatus>;
 
     /// Assign shards is called when the source is assigned a new set of shards by the control
     /// plane.
     async fn assign_shards(
         &mut self,
-        _shard_ids: BTreeSet<ShardId>,
-        _processor_mailbox: &Mailbox<P>,
-        _ctx: &SourceContext<P>,
+        _assignment: Assignment,
+        _doc_processor_mailbox: &Mailbox<DocProcessor>,
+        _ctx: &SourceContext,
     ) -> anyhow::Result<()> {
         Ok(())
     }
@@ -292,7 +290,7 @@ pub trait Source<P: Processor = DocProcessor>: Send + 'static {
     async fn suggest_truncate(
         &mut self,
         _checkpoint: SourceCheckpoint,
-        _ctx: &SourceContext<P>,
+        _ctx: &SourceContext,
     ) -> anyhow::Result<()> {
         Ok(())
     }
@@ -301,7 +299,7 @@ pub trait Source<P: Processor = DocProcessor>: Send + 'static {
     async fn finalize(
         &mut self,
         _exit_status: &ActorExitStatus,
-        _ctx: &SourceContext<P>,
+        _ctx: &SourceContext,
     ) -> anyhow::Result<()> {
         Ok(())
     }
@@ -319,9 +317,18 @@ pub trait Source<P: Processor = DocProcessor>: Send + 'static {
 /// The SourceActor acts as a thin wrapper over a source trait object to execute.
 ///
 /// It mostly takes care of running a loop calling `emit_batches(...)`.
-pub struct SourceActor<P: Processor = DocProcessor> {
-    pub source: Box<dyn Source<P>>,
-    pub processor_mailbox: Mailbox<P>,
+pub struct SourceActor {
+    source: Box<dyn Source>,
+    doc_processor_mailbox: Mailbox<DocProcessor>,
+}
+
+impl SourceActor {
+    pub fn new(source: Box<dyn Source>, doc_processor_mailbox: Mailbox<DocProcessor>) -> Self {
+        SourceActor {
+            source,
+            doc_processor_mailbox,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -330,13 +337,15 @@ struct Loop;
 #[derive(Debug)]
 pub struct Assignment {
     pub shard_ids: BTreeSet<ShardId>,
+    /// ULID of the originating indexing plan, used as the publish token when (re)acquiring shards.
+    pub indexing_plan_id: String,
 }
 
 #[derive(Debug)]
 pub struct AssignShards(pub Assignment);
 
 #[async_trait]
-impl<P: Processor> Actor for SourceActor<P> {
+impl Actor for SourceActor {
     type ObservableState = JsonValue;
 
     fn name(&self) -> String {
@@ -355,8 +364,10 @@ impl<P: Processor> Actor for SourceActor<P> {
         false
     }
 
-    async fn initialize(&mut self, ctx: &SourceContext<P>) -> Result<(), ActorExitStatus> {
-        self.source.initialize(&self.processor_mailbox, ctx).await?;
+    async fn initialize(&mut self, ctx: &SourceContext) -> Result<(), ActorExitStatus> {
+        self.source
+            .initialize(&self.doc_processor_mailbox, ctx)
+            .await?;
         self.handle(Loop, ctx).await?;
         Ok(())
     }
@@ -364,7 +375,7 @@ impl<P: Processor> Actor for SourceActor<P> {
     async fn finalize(
         &mut self,
         exit_status: &ActorExitStatus,
-        ctx: &SourceContext<P>,
+        ctx: &SourceContext,
     ) -> anyhow::Result<()> {
         self.source.finalize(exit_status, ctx).await?;
         Ok(())
@@ -372,17 +383,13 @@ impl<P: Processor> Actor for SourceActor<P> {
 }
 
 #[async_trait]
-impl<P: Processor> Handler<Loop> for SourceActor<P> {
+impl Handler<Loop> for SourceActor {
     type Reply = ();
 
-    async fn handle(
-        &mut self,
-        _message: Loop,
-        ctx: &SourceContext<P>,
-    ) -> Result<(), ActorExitStatus> {
+    async fn handle(&mut self, _message: Loop, ctx: &SourceContext) -> Result<(), ActorExitStatus> {
         let wait_for = self
             .source
-            .emit_batches(&self.processor_mailbox, ctx)
+            .emit_batches(&self.doc_processor_mailbox, ctx)
             .await?;
         if wait_for.is_zero() {
             ctx.send_self_message(Loop).await?;
@@ -394,17 +401,17 @@ impl<P: Processor> Handler<Loop> for SourceActor<P> {
 }
 
 #[async_trait]
-impl<P: Processor> Handler<AssignShards> for SourceActor<P> {
+impl Handler<AssignShards> for SourceActor {
     type Reply = ();
 
     async fn handle(
         &mut self,
         assign_shards_message: AssignShards,
-        ctx: &SourceContext<P>,
+        ctx: &SourceContext,
     ) -> Result<(), ActorExitStatus> {
-        let AssignShards(Assignment { shard_ids }) = assign_shards_message;
+        let AssignShards(assignment) = assign_shards_message;
         self.source
-            .assign_shards(shard_ids, &self.processor_mailbox, ctx)
+            .assign_shards(assignment, &self.doc_processor_mailbox, ctx)
             .await?;
         Ok(())
     }
@@ -431,24 +438,6 @@ pub fn quickwit_supported_sources() -> &'static SourceLoader {
         source_factory
     });
     &SOURCE_LOADER
-}
-
-/// Returns the source loader for parquet pipelines (ParquetDocProcessor).
-///
-/// Metrics pipelines currently only support IngestV2 sources, which is the
-/// production source type for metrics ingestion.
-pub fn quickwit_supported_parquet_sources() -> &'static ParquetSourceLoader {
-    static PARQUET_SOURCE_LOADER: LazyLock<ParquetSourceLoader> = LazyLock::new(|| {
-        let mut source_factory = ParquetSourceLoader::default();
-        // Only IngestV2 is currently used for metrics ingestion
-        source_factory.add_source(SourceType::IngestV2, IngestSourceFactory);
-        // Add other sources for testing/development
-        source_factory.add_source(SourceType::File, FileSourceFactory);
-        source_factory.add_source(SourceType::Vec, VecSourceFactory);
-        source_factory.add_source(SourceType::Void, VoidSourceFactory);
-        source_factory
-    });
-    &PARQUET_SOURCE_LOADER
 }
 
 pub async fn check_source_connectivity(
@@ -516,13 +505,13 @@ pub async fn check_source_connectivity(
 pub struct SuggestTruncate(pub SourceCheckpoint);
 
 #[async_trait]
-impl<P: Processor> Handler<SuggestTruncate> for SourceActor<P> {
+impl Handler<SuggestTruncate> for SourceActor {
     type Reply = ();
 
     async fn handle(
         &mut self,
         suggest_truncate: SuggestTruncate,
-        ctx: &SourceContext<P>,
+        ctx: &SourceContext,
     ) -> Result<(), ActorExitStatus> {
         let SuggestTruncate(checkpoint) = suggest_truncate;
 
@@ -542,7 +531,7 @@ pub(super) struct BatchBuilder {
     num_bytes: u64,
     checkpoint_delta: SourceCheckpointDelta,
     force_commit: bool,
-    gauge_guard: GaugeGuard<'static>,
+    gauge_guard: GaugeGuard,
 }
 
 impl BatchBuilder {
@@ -552,15 +541,15 @@ impl BatchBuilder {
 
     pub fn with_capacity(capacity: usize, source_type: SourceType) -> Self {
         let gauge = match source_type {
-            SourceType::File => MEMORY_METRICS.in_flight.file(),
-            SourceType::IngestV2 => MEMORY_METRICS.in_flight.ingest(),
-            SourceType::Kafka => MEMORY_METRICS.in_flight.kafka(),
-            SourceType::Kinesis => MEMORY_METRICS.in_flight.kinesis(),
-            SourceType::PubSub => MEMORY_METRICS.in_flight.pubsub(),
-            SourceType::Pulsar => MEMORY_METRICS.in_flight.pulsar(),
-            _ => MEMORY_METRICS.in_flight.other(),
+            SourceType::File => &IN_FLIGHT_FILE_SOURCE,
+            SourceType::IngestV2 => &IN_FLIGHT_INGEST_SOURCE,
+            SourceType::Kafka => &IN_FLIGHT_KAFKA_SOURCE,
+            SourceType::Kinesis => &IN_FLIGHT_KINESIS_SOURCE,
+            SourceType::PubSub => &IN_FLIGHT_PUBSUB_SOURCE,
+            SourceType::Pulsar => &IN_FLIGHT_PULSAR_SOURCE,
+            _ => &IN_FLIGHT_OTHER_SOURCE,
         };
-        let gauge_guard = GaugeGuard::from_gauge(gauge);
+        let gauge_guard = GaugeGuard::new(gauge, 0.0);
 
         Self {
             docs: Vec::with_capacity(capacity),
@@ -574,8 +563,8 @@ impl BatchBuilder {
     pub fn add_doc(&mut self, doc: Bytes) {
         let num_bytes = doc.len();
         self.docs.push(doc);
-        self.gauge_guard.add(num_bytes as i64);
         self.num_bytes += num_bytes as u64;
+        self.gauge_guard.increment(num_bytes as f64);
     }
 
     pub fn force_commit(&mut self) {
@@ -590,7 +579,7 @@ impl BatchBuilder {
     pub fn clear(&mut self) {
         self.docs.clear();
         self.checkpoint_delta = SourceCheckpointDelta::default();
-        self.gauge_guard.sub(self.num_bytes as i64);
+        self.gauge_guard.decrement(self.num_bytes as f64);
         self.num_bytes = 0;
     }
 }
@@ -637,7 +626,7 @@ mod tests {
 
             SourceRuntime {
                 pipeline_id: IndexingPipelineId {
-                    node_id: NodeId::from("test-node"),
+                    node_id: NodeId::from_str("test-node"),
                     index_uid: self.index_uid,
                     source_id: self.source_config.source_id.clone(),
                     pipeline_uid: PipelineUid::for_test(0u128),
@@ -649,6 +638,7 @@ mod tests {
                 storage_resolver: StorageResolver::for_test(),
                 event_broker: EventBroker::default(),
                 indexing_setting: IndexingSettings::default(),
+                publish_token: SharedPublishToken::default(),
             }
         }
 
@@ -780,10 +770,9 @@ mod test_setup_helper {
     use quickwit_metastore::checkpoint::{IndexCheckpointDelta, PartitionId};
     use quickwit_metastore::{CreateIndexRequestExt, SplitMetadata, StageSplitsRequestExt};
     use quickwit_proto::metastore::{CreateIndexRequest, PublishSplitsRequest, StageSplitsRequest};
-    use quickwit_proto::types::Position;
+    use quickwit_proto::types::{Position, SplitId};
 
     use super::*;
-    use crate::new_split_id;
 
     pub async fn setup_index(
         metastore: MetastoreServiceClient,
@@ -808,7 +797,7 @@ mod test_setup_helper {
         if partition_deltas.is_empty() {
             return index_uid;
         }
-        let split_id = new_split_id();
+        let split_id = SplitId::new();
         let split_metadata = SplitMetadata::for_test(split_id.clone());
         let stage_splits_request =
             StageSplitsRequest::try_from_split_metadata(index_uid.clone(), &split_metadata)
@@ -829,7 +818,7 @@ mod test_setup_helper {
         let publish_splits_request = PublishSplitsRequest {
             index_uid: Some(index_uid.clone()),
             index_checkpoint_delta_json_opt: Some(checkpoint_delta_json),
-            staged_split_ids: vec![split_id.clone()],
+            staged_split_ids: vec![split_id.to_string()],
             replaced_split_ids: Vec::new(),
             publish_token_opt: None,
         };

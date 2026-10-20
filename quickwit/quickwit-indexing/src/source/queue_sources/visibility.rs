@@ -23,7 +23,6 @@ use quickwit_actors::{
 use serde_json::{Value as JsonValue, json};
 
 use super::Queue;
-use crate::actors::Processor;
 use crate::source::SourceContext;
 
 #[derive(Debug, Clone)]
@@ -48,9 +47,9 @@ impl VisibilitySettings {
     pub(super) fn from_commit_timeout(commit_timeout_secs: usize) -> Self {
         let commit_timeout = Duration::from_secs(commit_timeout_secs as u64);
         Self {
-            deadline_for_receive: Duration::from_secs(120) + commit_timeout,
+            deadline_for_receive: Duration::from_mins(2) + commit_timeout,
             deadline_for_last_extension: 2 * commit_timeout,
-            deadline_for_default_extension: Duration::from_secs(60),
+            deadline_for_default_extension: Duration::from_mins(1),
             request_timeout: Duration::from_secs(3),
             request_margin: Duration::from_secs(1),
         }
@@ -81,8 +80,8 @@ pub(super) struct VisibilityTaskHandle {
 /// (represented by its ack_id) is extended when required. We prefer applying
 /// ample margins in the extension process to avoid missing deadlines while also
 /// keeping the number of extension requests (and associated cost) small.
-pub(super) fn spawn_visibility_task<P: Processor>(
-    ctx: &SourceContext<P>,
+pub(super) fn spawn_visibility_task(
+    ctx: &SourceContext,
     queue: Arc<dyn Queue>,
     ack_id: String,
     current_deadline: Instant,

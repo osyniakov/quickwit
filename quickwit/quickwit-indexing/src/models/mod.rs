@@ -21,15 +21,16 @@ mod merge_planner_message;
 mod merge_scratch;
 mod merge_statistics;
 mod packaged_split;
-mod parquet_splits_update;
 mod processed_doc;
-mod processed_parquet_batch;
 mod publish_lock;
 mod publisher_message;
 mod raw_doc_batch;
 mod shard_positions;
 mod split_attrs;
 
+use std::sync::Arc;
+
+use arc_swap::ArcSwapOption;
 pub use indexed_split::{
     CommitTrigger, EmptySplit, IndexedSplit, IndexedSplitBatch, IndexedSplitBatchBuilder,
     IndexedSplitBuilder,
@@ -42,9 +43,7 @@ pub use merge_planner_message::NewSplits;
 pub use merge_scratch::MergeScratch;
 pub use merge_statistics::MergeStatistics;
 pub use packaged_split::{PackagedSplit, PackagedSplitBatch};
-pub use parquet_splits_update::ParquetSplitsUpdate;
 pub use processed_doc::{ProcessedDoc, ProcessedDocBatch};
-pub use processed_parquet_batch::ProcessedParquetBatch;
 pub use publish_lock::{NewPublishLock, PublishLock};
 pub use publisher_message::SplitsUpdate;
 use quickwit_proto::types::PublishToken;
@@ -53,5 +52,7 @@ pub(crate) use shard_positions::LocalShardPositionsUpdate;
 pub use shard_positions::ShardPositionsService;
 pub use split_attrs::{SplitAttrs, create_split_metadata};
 
-#[derive(Debug)]
-pub struct NewPublishToken(pub PublishToken);
+/// Shared, live publish token owned by an indexing pipeline. The source writes it on reset and
+/// shard re-acquisition; the publisher reads it at publish time. `None` means no token (merge
+/// pipelines, or sources without a publish token such as file/kafka).
+pub type SharedPublishToken = Arc<ArcSwapOption<PublishToken>>;
