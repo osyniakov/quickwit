@@ -1,0 +1,38 @@
+# Document count: the silent last minute is flagged as a drop.
+method: POST
+endpoint: anomalies/anomalies
+json:
+  timestamp_field: ts
+  interval: 1m
+  start_timestamp: 1699999980
+  end_timestamp: 1700000700
+expected:
+  num_hits: 38
+  num_anomalies: 1
+  buckets:
+    $expect: "(len(val) == 12) and (val[0]['timestamp_millis'] == 1699999980000) and (all(bucket['z_score'] is None for bucket in val[:5])) and ([bucket['is_anomaly'] for bucket in val].index(True) == 11) and (val[11]['value'] == 0 and val[11]['z_score'] < -3)"
+---
+# Average latency: the spike is flagged, the empty minute has no value.
+method: POST
+endpoint: anomalies/anomalies
+json:
+  timestamp_field: ts
+  interval: 1m
+  start_timestamp: 1699999980
+  end_timestamp: 1700000700
+  metric:
+    type: avg
+    field: latency
+expected:
+  num_anomalies: 1
+  buckets:
+    $expect: "(val[10]['is_anomaly'] and val[10]['value'] == 500) and (val[11]['value'] is None and not val[11]['is_anomaly'])"
+---
+# Invalid smoothing factor.
+method: POST
+endpoint: anomalies/anomalies
+json:
+  timestamp_field: ts
+  interval: 1m
+  alpha: 0
+status_code: 400

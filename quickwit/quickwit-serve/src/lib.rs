@@ -14,6 +14,7 @@
 
 #![recursion_limit = "256"]
 
+mod anomaly_api;
 mod build_info;
 mod cluster_api;
 mod decompression;

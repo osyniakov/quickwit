@@ -22,6 +22,7 @@ use quickwit_metastore::MetastoreApiSchemas;
 use utoipa::OpenApi;
 use utoipa::openapi::Tag;
 
+use crate::anomaly_api::AnomalyApi;
 use crate::cluster_api::ClusterApi;
 use crate::delete_task_api::DeleteTaskApi;
 use crate::developer_api::DeveloperApi;
@@ -80,6 +81,7 @@ pub fn build_docs() -> utoipa::openapi::OpenApi {
     docs_base.tags = Some(tags);
 
     // Routing
+    docs_base.merge_components_and_paths(AnomalyApi::openapi().with_path_prefix("/api/v1"));
     docs_base.merge_components_and_paths(ClusterApi::openapi().with_path_prefix("/api/v1"));
     docs_base.merge_components_and_paths(DeleteTaskApi::openapi().with_path_prefix("/api/v1"));
     docs_base

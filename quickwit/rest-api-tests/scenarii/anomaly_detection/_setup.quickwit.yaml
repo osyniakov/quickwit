@@ -1,0 +1,65 @@
+# Delete possibly remaining index
+method: DELETE
+endpoint: indexes/anomalies
+status_code: null
+---
+method: POST
+endpoint: indexes/
+json:
+  version: "0.7"
+  index_id: anomalies
+  doc_mapping:
+    timestamp_field: ts
+    field_mappings:
+      - name: ts
+        type: datetime
+        fast: true
+      - name: latency
+        type: u64
+        fast: true
+---
+# 11 minutes of regular traffic, the last one with a latency spike,
+# followed by a silent minute.
+method: POST
+endpoint: anomalies/ingest
+params:
+  commit: force
+ndjson:
+  - {"ts": 1699999980, "latency": 10}
+  - {"ts": 1699999981, "latency": 10}
+  - {"ts": 1699999982, "latency": 10}
+  - {"ts": 1700000040, "latency": 12}
+  - {"ts": 1700000041, "latency": 12}
+  - {"ts": 1700000042, "latency": 12}
+  - {"ts": 1700000043, "latency": 12}
+  - {"ts": 1700000100, "latency": 10}
+  - {"ts": 1700000101, "latency": 10}
+  - {"ts": 1700000102, "latency": 10}
+  - {"ts": 1700000160, "latency": 12}
+  - {"ts": 1700000161, "latency": 12}
+  - {"ts": 1700000162, "latency": 12}
+  - {"ts": 1700000163, "latency": 12}
+  - {"ts": 1700000220, "latency": 10}
+  - {"ts": 1700000221, "latency": 10}
+  - {"ts": 1700000222, "latency": 10}
+  - {"ts": 1700000280, "latency": 12}
+  - {"ts": 1700000281, "latency": 12}
+  - {"ts": 1700000282, "latency": 12}
+  - {"ts": 1700000283, "latency": 12}
+  - {"ts": 1700000340, "latency": 10}
+  - {"ts": 1700000341, "latency": 10}
+  - {"ts": 1700000342, "latency": 10}
+  - {"ts": 1700000400, "latency": 12}
+  - {"ts": 1700000401, "latency": 12}
+  - {"ts": 1700000402, "latency": 12}
+  - {"ts": 1700000403, "latency": 12}
+  - {"ts": 1700000460, "latency": 10}
+  - {"ts": 1700000461, "latency": 10}
+  - {"ts": 1700000462, "latency": 10}
+  - {"ts": 1700000520, "latency": 12}
+  - {"ts": 1700000521, "latency": 12}
+  - {"ts": 1700000522, "latency": 12}
+  - {"ts": 1700000523, "latency": 12}
+  - {"ts": 1700000580, "latency": 500}
+  - {"ts": 1700000581, "latency": 500}
+  - {"ts": 1700000582, "latency": 500}

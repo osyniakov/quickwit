@@ -44,6 +44,7 @@ use warp::hyper::http::HeaderValue;
 use warp::hyper::{Method, StatusCode, http};
 use warp::{Filter, Rejection, Reply, redirect};
 
+use crate::anomaly_api::anomaly_detection_post_handler;
 use crate::cluster_api::cluster_handler;
 use crate::decompression::{CorruptedData, UnsupportedEncoding};
 use crate::delete_task_api::delete_task_api_handlers;
@@ -572,6 +573,13 @@ fn api_v1_routes(
         .or(index_template_api_handlers(
             quickwit_services.metastore_client.clone(),
         ))
+        .boxed()
+        // `{index_id}/anomalies` also matches `indexes/anomalies`, and its recover turns a method
+        // mismatch into a reply. It must come last so it does not shadow the index API.
+        .or(
+            anomaly_detection_post_handler(quickwit_services.search_service.clone())
+                .recover(recover_fn),
+        )
         .boxed(),
     )
 }

@@ -113,6 +113,58 @@ GET api/v1/stackoverflow*/search
 }
 ```
 
+### Detect anomalies
+
+```
+POST api/v1/<index id>/anomalies
+{
+  "query": "service_name:checkout",
+  "timestamp_field": "span_start_timestamp_nanos",
+  "interval": "1m",
+  "metric": {"type": "avg", "field": "span_duration_millis"},
+  "start_timestamp": 1760000000,
+  "end_timestamp": 1760003600
+}
+```
+
+Builds a time series out of the documents matching `query`, then flags the buckets that deviate from their recent history. You can use it to spot error bursts, traffic drops, or latency regressions in logs and traces. The `index id` path variable supports the [multi-target syntax](#search-multiple-indices).
+
+Each bucket's value is the document count, or a metric computed on a numeric fast field (for instance the average `span_duration_millis`). Buckets are scored in chronological order against an exponentially weighted moving average (EWMA) and variance of the buckets that precede them:
+
+```
+z_score = (value - expected) / std_dev
+```
+
+A bucket is anomalous when `|z_score| >= threshold`. Every scored bucket then updates the baseline, anomalous ones included, so a sustained level shift gradually becomes the new normal. When the baseline is perfectly flat (`std_dev` is 0), any deviation from it is flagged.
+
+Empty buckets are returned (count `0`), so a source going silent shows up as a drop. When both `start_timestamp` and `end_timestamp` are set, the series covers the whole range, including its empty edges. If any split fails, the request fails rather than return a partial series that would look like a drop.
+
+#### Parameters
+
+| Variable          | Type      | Description     | Default value   |
+|-------------------|-----------|-----------------|-----------------|
+| `query`           | `String`  | Query selecting the documents to analyze. See the [query language doc](query-language.md) | `*` |
+| `timestamp_field` | `String`  | Datetime fast field used to bucket documents. | _required_ |
+| `interval`        | `String`  | Fixed bucket width, e.g. `30s`, `1m`, `1h`. Supported units: `ms`, `s`, `m`, `h`, `d`. | _required_ |
+| `start_timestamp` | `i64`     | If set, restrict the analysis to documents with a `timestamp >= start_timestamp`, in seconds. | |
+| `end_timestamp`   | `i64`     | If set, restrict the analysis to documents with a `timestamp < end_timestamp`, in seconds. | |
+| `metric`          | `Object`  | Metric to analyze per bucket: `{"type": "avg" \| "sum" \| "min" \| "max", "field": "<numeric fast field>"}`. When absent, the document count is analyzed. | |
+| `alpha`           | `f64`     | EWMA smoothing factor, in `(0, 1]`. Higher values make the baseline adapt faster. | `0.3` |
+| `threshold`       | `f64`     | Minimum absolute z-score for a bucket to be flagged. | `3.0` |
+| `warmup`          | `Integer` | Number of buckets with a value used to build the baseline before scoring starts. | `5` |
+| `format`          | `Enum`    | The output format. Allowed values are "json" or "pretty_json" | `pretty_json` |
+
+#### Response
+
+| Field                 | Description                                     | Type       |
+| --------------------- | ----------------------------------------------- | :--------: |
+| `num_hits`            | Total number of matching documents              | `number`   |
+| `num_anomalies`       | Number of buckets flagged as anomalous          | `number`   |
+| `buckets`             | The time series, in chronological order         | `[bucket]` |
+| `elapsed_time_micros` | Processing time of the query                    | `number`   |
+
+Each bucket contains `timestamp_millis` (bucket start), `doc_count`, `value`, `expected`, `std_dev`, `z_score` and `is_anomaly`. `value` is `null` when the metric is undefined for the bucket (e.g. an average over an empty bucket). `expected`, `std_dev` and `z_score` are `null` for buckets that were not scored: warmup buckets and buckets without a value.
+
 ## Ingest API
 
 ### Ingest data into an index
