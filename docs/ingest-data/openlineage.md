@@ -181,10 +181,10 @@ Events are committed within 10 seconds (`commit_timeout_secs`).
 
 ## Search events
 
-Let's start with the configuration of the tasks reading the `public.orders` table:
+Let's start with the configuration of the tasks reading the `public.orders` table. Only the `JobEvent`s sent by the script carry the `jobType` job facet:
 
 ```bash
-curl "http://localhost:7280/api/v1/openlineage/search?query=schemaURL:\"https://openlineage.io/spec/2-0-2/OpenLineage.json%23/\$defs/JobEvent\"%20AND%20inputs.name:public.orders"
+curl "http://localhost:7280/api/v1/openlineage/search?query=job.facets.jobType.jobType:TASK%20AND%20inputs.name:public.orders"
 ```
 
 Then the failed runs and their error message:

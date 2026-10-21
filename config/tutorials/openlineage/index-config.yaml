@@ -9,9 +9,6 @@
 #   COMPLETE, FAIL, ABORT, OTHER), with run-level facets such as the execution
 #   parameters, the parent run, or the error message.
 #
-# The kind of an event can be told apart with the `schemaURL` field, which
-# ends with `#/$defs/RunEvent`, `#/$defs/JobEvent`, or `#/$defs/DatasetEvent`.
-#
 
 version: 0.8
 
