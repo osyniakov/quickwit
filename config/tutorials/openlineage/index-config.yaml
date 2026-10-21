@@ -1,0 +1,89 @@
+#
+# Index config file for receiving OpenLineage events.
+# Link: https://openlineage.io/docs/spec/object-model
+#
+# A single index stores the three kinds of OpenLineage events:
+# - `JobEvent` and `DatasetEvent`: static lineage, i.e. the configuration of
+#   jobs and datasets (job type, SQL, source code, schemas, owners...).
+# - `RunEvent`: runtime lineage, i.e. the execution of a job (START, RUNNING,
+#   COMPLETE, FAIL, ABORT, OTHER), with run-level facets such as the execution
+#   parameters, the parent run, or the error message.
+#
+
+version: 0.8
+
+index_id: openlineage
+
+doc_mapping:
+  # Facets are open-ended (custom facets are allowed by the spec), so the
+  # fields not declared below are kept and indexed dynamically.
+  mode: dynamic
+  field_mappings:
+    - name: eventTime
+      type: datetime
+      input_formats: [rfc3339]
+      output_format: rfc3339
+      fast: true
+      fast_precision: milliseconds
+    - name: eventType
+      type: text
+      tokenizer: raw
+      fast: true
+    - name: producer
+      type: text
+      tokenizer: raw
+    - name: schemaURL
+      type: text
+      tokenizer: raw
+    - name: run
+      type: object
+      field_mappings:
+        - name: runId
+          type: text
+          tokenizer: raw
+          fast: true
+        - name: facets
+          type: json
+          tokenizer: default
+    - name: job
+      type: object
+      field_mappings:
+        - name: namespace
+          type: text
+          tokenizer: raw
+          fast: true
+        - name: name
+          type: text
+          tokenizer: raw
+          fast: true
+        - name: facets
+          type: json
+          tokenizer: default
+    # Only set on `DatasetEvent`.
+    - name: dataset
+      type: object
+      field_mappings:
+        - name: namespace
+          type: text
+          tokenizer: raw
+          fast: true
+        - name: name
+          type: text
+          tokenizer: raw
+          fast: true
+        - name: facets
+          type: json
+          tokenizer: default
+    - name: inputs
+      type: array<json>
+      tokenizer: raw
+    - name: outputs
+      type: array<json>
+      tokenizer: raw
+  timestamp_field: eventTime
+
+search_settings:
+  default_search_fields: [job.name, job.namespace, run.facets, job.facets]
+
+indexing_settings:
+  commit_timeout_secs: 10
