@@ -1,0 +1,10 @@
+# OpenLineage client configuration sending events to the Quickwit ingest API.
+# Link: https://openlineage.io/docs/client/python#configuration
+#
+# The HTTP transport posts each event as a single-line JSON document to
+# `<url>/<endpoint>`, which is the format expected by the ingest API.
+transport:
+  type: http
+  url: http://localhost:7280
+  endpoint: api/v1/openlineage/ingest
+  timeout: 10
