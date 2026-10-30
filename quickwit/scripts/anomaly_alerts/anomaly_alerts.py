@@ -11,8 +11,10 @@ A bucket is anomalous when `|z_score| >= threshold` (optionally only in one
 direction). Only anomalies in the most recent `--alert-buckets` buckets raise
 alerts; older buckets serve as history to build the baseline.
 
-The analyzed window always ends on a bucket boundary, so the bucket that is still
-being filled is never scored: a half-full bucket would look like a drop.
+The analyzed window ends `--delay` before now, rounded down to a bucket boundary.
+Quickwit only makes documents searchable after a commit (every 60s by default, see
+`commit_timeout_secs`), so scoring a bucket before its documents are committed would
+make it look like a drop.
 
 Exit codes: 0 = no alert, 1 = at least one alert, 2 = error.
 
@@ -59,11 +61,15 @@ class QuickwitError(Exception):
     pass
 
 
-def parse_duration_secs(duration: str) -> int:
+def parse_duration_secs(duration: str, allow_zero: bool = False) -> int:
     """Parses `30s`, `5m`, `1h`, `7d` into seconds."""
     unit = duration[-1:]
     amount = duration[:-1]
-    if unit not in INTERVAL_UNITS_SECS or not amount.isdigit() or int(amount) == 0:
+    if (
+        unit not in INTERVAL_UNITS_SECS
+        or not amount.isdigit()
+        or (int(amount) == 0 and not allow_zero)
+    ):
         raise ValueError(
             f"invalid duration `{duration}`: expected a positive integer followed by one of "
             f"{', '.join(INTERVAL_UNITS_SECS)} (e.g. `5m`)"
@@ -73,9 +79,13 @@ def parse_duration_secs(duration: str) -> int:
 
 @dataclass(frozen=True)
 class DetectorConfig:
-    alpha: float = 0.3
-    threshold: float = 3.0
-    warmup: int = 5
+    # On steady Poisson traffic, these defaults raise about 0.1 false alarm per 1,000
+    # buckets while catching drops and spikes of 50%. With `alpha=0.3, threshold=3`,
+    # the variance estimate only remembers a handful of buckets and about 40 buckets
+    # per 1,000 are false alarms.
+    alpha: float = 0.05
+    threshold: float = 4.0
+    warmup: int = 30
     direction: str = "both"
 
     def validate(self) -> None:
@@ -324,21 +334,31 @@ def parse_args(argv: list) -> argparse.Namespace:
         "(requires --index to be a single index ID).",
     )
     parser.add_argument("--interval", default="1m", help="Bucket width: `30s`, `5m`, `1h`...")
-    parser.add_argument("--lookback", default="2h", help="History analyzed, e.g. `2h`, `7d`.")
+    parser.add_argument(
+        "--lookback",
+        default="3h",
+        help="History analyzed, e.g. `3h`, `7d`. Aim for 150-200 buckets.",
+    )
     parser.add_argument(
         "--end",
         type=int,
-        help="End of the window in seconds since epoch (excluded). Defaults to now. "
-        "Rounded down to a bucket boundary.",
+        help="End of the window in seconds since epoch (excluded). Defaults to now.",
+    )
+    parser.add_argument(
+        "--delay",
+        default="90s",
+        help="Subtracted from the end of the window before rounding it down to a bucket "
+        "boundary, so that recent documents are committed. Must exceed the index "
+        "`commit_timeout_secs` (60s by default) plus ingestion lag. `0s` for backfills.",
     )
     parser.add_argument(
         "--metric",
         help="Metric to analyze per bucket, `<avg|sum|min|max>:<field>`. Defaults to doc count.",
     )
-    parser.add_argument("--alpha", type=float, default=0.3, help="EWMA smoothing, in (0, 1].")
-    parser.add_argument("--threshold", type=float, default=3.0, help="Minimum |z-score|.")
+    parser.add_argument("--alpha", type=float, default=0.05, help="EWMA smoothing, in (0, 1].")
+    parser.add_argument("--threshold", type=float, default=4.0, help="Minimum |z-score|.")
     parser.add_argument(
-        "--warmup", type=int, default=5, help="Buckets used to build the baseline first."
+        "--warmup", type=int, default=30, help="Buckets used to build the baseline first."
     )
     parser.add_argument("--direction", choices=DIRECTIONS, default="both")
     parser.add_argument(
@@ -359,6 +379,7 @@ def run(args: argparse.Namespace) -> int:
     metric = parse_metric(args.metric)
     interval_secs = parse_duration_secs(args.interval)
     lookback_secs = parse_duration_secs(args.lookback)
+    delay_secs = parse_duration_secs(args.delay, allow_zero=True)
     num_buckets = lookback_secs // interval_secs
     if lookback_secs % interval_secs != 0:
         raise ValueError("`lookback` must be a multiple of `interval`")
@@ -369,7 +390,8 @@ def run(args: argparse.Namespace) -> int:
         )
 
     end_timestamp = args.end if args.end is not None else int(time.time())
-    # Drop the bucket still being filled.
+    # Drop the buckets whose documents may not be searchable yet.
+    end_timestamp -= delay_secs
     end_timestamp -= end_timestamp % interval_secs
     start_timestamp = end_timestamp - lookback_secs
 

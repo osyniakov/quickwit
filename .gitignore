@@ -41,3 +41,6 @@ quickwit/lambda-artifact/
 
 # OpenSSL CA serial file generated during TLS test setup
 **/ca.srl
+
+# Python bytecode
+__pycache__/

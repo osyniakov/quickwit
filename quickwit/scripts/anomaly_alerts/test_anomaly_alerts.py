@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Unit tests for `anomaly_alerts.py`. Run with `python3 -m unittest test_anomaly_alerts.py`."""
 
+import dataclasses
 import json
+import math
+import random
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -21,6 +24,10 @@ from anomaly_alerts import (
     parse_metric,
     score_series,
 )
+
+
+# Short warmup and fast smoothing, for tests on short series.
+FAST_CONFIG = DetectorConfig(alpha=0.3, threshold=3.0, warmup=5)
 
 
 def alternating(low, high, num_values):
@@ -50,7 +57,7 @@ class DetectorTest(unittest.TestCase):
         self.assertFalse(scores[2].is_anomaly)
 
     def test_spike_and_drop(self):
-        config = DetectorConfig()
+        config = FAST_CONFIG
         spike_scores = score_series(alternating(100, 104, 20) + [500.0], config)
         self.assertTrue(all(score is None for score in spike_scores[:5]))
         self.assertTrue(all(not score.is_anomaly for score in spike_scores[5:20]))
@@ -61,8 +68,20 @@ class DetectorTest(unittest.TestCase):
 
     def test_direction(self):
         values = alternating(100, 104, 20) + [0.0]
-        self.assertFalse(score_series(values, DetectorConfig(direction="up"))[20].is_anomaly)
-        self.assertTrue(score_series(values, DetectorConfig(direction="down"))[20].is_anomaly)
+        up_config = dataclasses.replace(FAST_CONFIG, direction="up")
+        down_config = dataclasses.replace(FAST_CONFIG, direction="down")
+        self.assertFalse(score_series(values, up_config)[20].is_anomaly)
+        self.assertTrue(score_series(values, down_config)[20].is_anomaly)
+
+    def test_default_config_false_alarm_rate(self):
+        rng = random.Random(7)
+        noise = [rng.gauss(200, math.sqrt(200)) for _ in range(20_000)]
+        scores = [score for score in score_series(noise, DetectorConfig()) if score]
+        num_false_alarms = sum(score.is_anomaly for score in scores)
+        self.assertLess(num_false_alarms / len(scores), 1 / 1_000)
+        for factor in (0.5, 1.5):
+            last_score = score_series(noise[:200] + [200 * factor], DetectorConfig())[-1]
+            self.assertTrue(last_score.is_anomaly)
 
     def test_flat_baseline(self):
         scores = score_series([10.0] * 6 + [11.0], DetectorConfig(warmup=2))
@@ -85,6 +104,7 @@ class RequestResponseTest(unittest.TestCase):
         for invalid in ("", "m", "0m", "1.5h", "10ms", "-1m"):
             with self.assertRaises(ValueError):
                 parse_duration_secs(invalid)
+        self.assertEqual(parse_duration_secs("0s", allow_zero=True), 0)
 
     def test_parse_metric(self):
         self.assertIsNone(parse_metric(None))
@@ -154,7 +174,7 @@ class RequestResponseTest(unittest.TestCase):
     def test_compute_buckets_only_alerts_on_recent_buckets(self):
         values = alternating(100, 104, 10) + [500.0] + alternating(100, 104, 10) + [500.0]
         series = [(i * 60_000, int(value), value) for (i, value) in enumerate(values)]
-        buckets = compute_buckets(series, DetectorConfig(), alert_buckets=1)
+        buckets = compute_buckets(series, FAST_CONFIG, alert_buckets=1)
         self.assertTrue(buckets[10].is_anomaly)
         self.assertFalse(buckets[10].is_alert)
         self.assertTrue(buckets[-1].is_alert)
@@ -218,7 +238,8 @@ class EndToEndTest(unittest.TestCase):
             },
         }
         exit_code, stdout = self.run_main(
-            "--index", "logs", "--lookback", "12m", "--end", "750",
+            "--index", "logs", "--lookback", "12m", "--end", "840", "--delay", "90s",
+            "--alpha", "0.3", "--threshold", "3", "--warmup", "5",
             "--webhook", f"{self.endpoint}/hook",
         )
         self.assertEqual(exit_code, anomaly_alerts.EXIT_ALERT)
@@ -229,7 +250,7 @@ class EndToEndTest(unittest.TestCase):
             [("GET", "/api/v1/indexes/logs"), ("POST", "/api/v1/logs/search"), ("POST", "/hook")],
         )
         search_body = FakeQuickwit.requests[1][2]
-        # The end is rounded down to a bucket boundary to skip the bucket still being filled.
+        # 840 - 90 = 750, rounded down to a bucket boundary.
         self.assertEqual((search_body["start_timestamp"], search_body["end_timestamp"]), (0, 720))
         self.assertEqual(
             search_body["aggs"][HISTOGRAM_AGG_NAME]["date_histogram"]["field"], "ts"
@@ -248,6 +269,15 @@ class EndToEndTest(unittest.TestCase):
         with mock.patch("sys.stderr", new_callable=StringIO):
             exit_code, _ = self.run_main("--index", "logs", "--lookback", "5m")
         self.assertEqual(exit_code, anomaly_alerts.EXIT_ERROR)
+
+    def test_backfill_without_delay(self):
+        FakeQuickwit.search_response = {"num_hits": 0, "errors": []}
+        exit_code, _ = self.run_main(
+            "--index", "logs", "--timestamp-field", "ts", "--end", "10800", "--delay", "0s"
+        )
+        self.assertEqual(exit_code, anomaly_alerts.EXIT_OK)
+        search_body = FakeQuickwit.requests[0][2]
+        self.assertEqual((search_body["start_timestamp"], search_body["end_timestamp"]), (0, 10800))
 
 
 if __name__ == "__main__":
